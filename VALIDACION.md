@@ -57,3 +57,8 @@ Se añadió un selector de modo al formulario y un acceso directo desde la ficha
 ## Adquiridos a la fecha y período al cierre
 
 Se conservan las 17 pruebas y se agregan seis (23 en total). Cubren el caso ficticio de ingreso 08/10/2026 y cómputo 06/11/2026 (22 lunes a viernes; 1 día proporcional orientativo; proyección 3), límites de 19/20 computables, umbral orientativo de período completo y separación de años. También verifican corrección manual y cero, días confirmados, reinicio al cálculo diario, asignación anual independiente, conservación de saldo inicial, permisos de lectura, exportación, copias y migración de esquema anterior. La prueba de navegador verifica edición desde la nómina, adquiridos manuales 1 y asignación anual 14 manteniendo el saldo inicial existente; se revisa la ficha con los conceptos separados. Se mantienen las comprobaciones de saldos históricos y vacaciones futuras. No se acredita asistencia real ni se valida un convenio: las sugerencias se identifican como orientativas.
+
+
+## Buscadores por nombre y apellido
+
+El formulario ahora tiene Buscar, envío con Enter y Limpiar. La búsqueda usa únicamente nombres y apellidos normalizados; cada sección guarda su consulta por separado. Empleados no recibe los filtros de sector/tipo de otra sección. Se añadió contador de resultados y mensaje de nómina sin coincidencias. La prueba de navegador con cinco empleados ficticios comprueba envío por botón y Enter en nómina y ausencias, apellidos, tildes, mayúsculas, espacios, orden de palabras, cero coincidencias, exclusión de identificadores, limpieza y aislamiento entre secciones; también verifica la combinación con sector y tipo en ausencias. Pasó junto con los flujos existentes de saldos e historial, sin errores JavaScript.

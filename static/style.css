@@ -4,3 +4,5 @@
 
 /* Corevia: navy identity, vivid blue actions and soft blue surfaces. */
 .brand{font-size:initial;letter-spacing:normal;line-height:1}.brand img{display:block;width:100%;height:auto;max-width:320px}.login .brand{margin-bottom:28px}h1,h2,h3,.stats strong{color:#050e3e}.primary{box-shadow:0 3px 8px #1265d619}.auth{background:radial-gradient(ellipse at top,#e0edff,transparent 70%)}
+
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.toolbar form.search{display:flex;gap:8px;align-items:center;flex:1;min-width:320px}.toolbar form.search input{border:1px solid #dfe4e9;flex:1;min-width:100px}.toolbar form.search button{flex-shrink:0}.toolbar form.search .primary{font-size:13px}@media(max-width:760px){.toolbar form.search{min-width:0;flex-basis:100%;flex-wrap:wrap}.toolbar form.search input{flex-basis:100%}}

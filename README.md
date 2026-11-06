@@ -38,6 +38,12 @@ Aplicación web interna para una empresa argentina. Python 3.12+, Flask, SQLite 
 - **Importación:** primera hoja `.xlsx`, encabezados exactos `code, first, last, sector, position, hired`. Un empleado por fila; `hired` debe ser una fecha Excel o texto `AAAA-MM-DD`. Ejemplo: `E001 | Ana | Pérez | Ventas | Analista | 2020-03-15`. Máximo 5000 empleados. Agrega empleados nuevos; identificadores duplicados cancelan toda la operación. Primero probá con datos ficticios y hacé una copia.
 - **Impresión:** elegí el mes y los filtros, luego **Imprimir calendario**. El navegador permite seleccionar «Guardar como PDF». Para colores, habilitá gráficos de fondo. Los enlaces «más» deben consultarse en pantalla para el detalle completo de jornadas con muchas ausencias.
 
+### Buscar empleados y vacaciones
+
+Escribí un **nombre o apellido** y presioná **Buscar** o **Enter**. Se admiten coincidencias parciales, mayúsculas, espacios y nombres sin tildes (por ejemplo, `lucia` encuentra `Lucía`). También podés escribir apellido y nombre en cualquier orden. El identificador interno ya no se usa como criterio de búsqueda.
+
+En Empleados se filtran las filas de la nómina; en Vacaciones y licencias se filtran las tarjetas por el nombre o apellido de la persona. Cada sección conserva su propia búsqueda, sin aplicarla a las otras. Debajo se muestra la cantidad de resultados. **Limpiar** vuelve a mostrar los registros y quita los filtros de esa sección. En Empleados se mantienen las opciones de estado y ordenación; sector y tipo de ausencia se muestran solo donde corresponden al calendario o las ausencias.
+
 ## Cargar saldos reales y vacaciones de meses anteriores
 
 No es necesario empezar con el total que sugiere la antigüedad. Podés registrar los días exactos validados para cada empleado y **cada período anual**, incluidos años anteriores y saldos de cero.
