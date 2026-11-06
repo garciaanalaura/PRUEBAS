@@ -27,8 +27,8 @@ Aplicación web interna para una empresa argentina. Python 3.12+, Flask, SQLite 
 ## Uso diario
 
 - **Empleados:** alta y edición, identificador único, sector, puesto, ingreso, estado y observaciones. Se puede dar de baja mediante el estado inactivo sin borrar el historial. Buscador, filtros y ordenación. Abrí el nombre para ver la ficha.
-- **Saldos:** seleccioná el período en la barra superior, abrí la ficha y elegí **Asignar / ajustar saldo**. Los días asignados incluyen el saldo inicial validado de ese año; el ajuste es el total adicional vigente y requiere motivo. No es una suma de movimientos: al editarlo reemplazás su valor anterior. Cada modificación queda en el registro de cambios. No se arrastran saldos entre años.
-- **Ausencias:** fechas inclusivas y días corridos. Las solicitadas no descuentan; las aprobadas reservan días, y las aprobadas que ya terminaron se computan como utilizadas. Las disfrutadas descuentan como utilizadas; las rechazadas y canceladas no descuentan. Un período en curso permanece reservado hasta finalizar. Las licencias no consumen vacaciones.
+- **Saldos:** seleccioná el período en la barra superior y abrí la ficha. **Editar días asignados** permite reemplazar la sugerencia por el total anual exacto y ajustes con motivo. **Cargar / editar saldo inicial real** permite indicar los días que quedan a una fecha de corte, aunque ya se hayan tomado vacaciones. Son dos formas alternativas de calcular el saldo; no se suman entre sí. Ver el paso a paso más abajo. Cada modificación queda auditada y no se arrastran saldos entre años.
+- **Ausencias:** fechas inclusivas y días corridos. Las solicitadas no descuentan; las aprobadas reservan días, y las aprobadas que ya terminaron se computan como utilizadas. Las disfrutadas descuentan como utilizadas; cuando hay saldo inicial real solo se descuentan los días posteriores a su fecha de corte. Las rechazadas y canceladas no descuentan. Un período en curso permanece reservado hasta finalizar. Las licencias no consumen vacaciones.
 - **Validaciones:** impide ausencias activas superpuestas de una misma persona, fechas anteriores al ingreso y ausencias futuras marcadas como disfrutadas. Informa coincidencias en el sector y saldo insuficiente: un administrador puede confirmar la excepción y queda auditada. Para aprobar se requiere fecha y responsable.
 - **Calendario:** lunes a domingo, navegación por mes/año, botón Hoy, filtros por sector, persona y tipo; bandas continuas en cada semana. Si hay más de tres filas, el enlace «+N más» abre las restantes. Las canceladas y rechazadas permanecen en el historial, sin mostrarse como ausencias en el calendario. Los indicadores siguen el mes actual de la computadora, aunque navegues a otro mes.
 - **Períodos:** el selector de período controla las fichas y la exportación de saldos. El mes del calendario se navega por separado. El historial general permite ver todas las ausencias; la ficha muestra el año seleccionado.
@@ -37,6 +37,46 @@ Aplicación web interna para una empresa argentina. Python 3.12+, Flask, SQLite 
 - **Excel:** descarga un archivo `.xlsx` con empleados/saldos del período y otra hoja con el historial completo de ausencias. La exportación incluye todos los empleados, sin aplicar los filtros visuales. No contiene contraseñas. Se neutralizan fórmulas en los campos de texto.
 - **Importación:** primera hoja `.xlsx`, encabezados exactos `code, first, last, sector, position, hired`. Un empleado por fila; `hired` debe ser una fecha Excel o texto `AAAA-MM-DD`. Ejemplo: `E001 | Ana | Pérez | Ventas | Analista | 2020-03-15`. Máximo 5000 empleados. Agrega empleados nuevos; identificadores duplicados cancelan toda la operación. Primero probá con datos ficticios y hacé una copia.
 - **Impresión:** elegí el mes y los filtros, luego **Imprimir calendario**. El navegador permite seleccionar «Guardar como PDF». Para colores, habilitá gráficos de fondo. Los enlaces «más» deben consultarse en pantalla para el detalle completo de jornadas con muchas ausencias.
+
+## Cargar saldos reales y vacaciones de meses anteriores
+
+No es necesario empezar con el total que sugiere la antigüedad. Podés registrar los días exactos validados para cada empleado y **cada período anual**, incluidos años anteriores y saldos de cero.
+
+### Si ya sabés cuántos días le quedan
+
+1. Abrí **Empleados**, buscá a la persona y seleccioná su nombre.
+2. Elegí **Cargar / editar saldo inicial real**.
+3. Indicá el **año al que corresponden los días**, los **días restantes**, la **fecha de corte** y un motivo (por ejemplo, «Saldo validado al comenzar a usar Clara»).
+4. La fecha de corte es **inclusive, al cierre de ese día**. El saldo que ingresás ya debe contemplar las vacaciones tomadas hasta esa fecha. No restes las vacaciones aprobadas posteriores: Clara las reserva aparte.
+5. Revisá la vista previa, marcá la confirmación y guardá. El año seleccionado se mostrará en la nómina y la ficha.
+6. Desde la ficha, elegí **Registrar vacaciones ya tomadas**. También está disponible en **Vacaciones y licencias**. Indicá empleado, período anual, inicio, fin y observaciones. El estado será **Disfrutadas** y no se permiten fechas futuras.
+
+**Ejemplo:** a Ana le quedan **7 días del período 2025 al 31/10/2026**. Cargá año 2025, saldo 7 y corte 31/10/2026. Podés registrar después sus vacaciones de agosto de 2026 imputadas a 2025: aparecerán en el historial y el calendario, pero el saldo seguirá en **7**. Si toma otros 3 días en noviembre, quedarán **4**.
+
+- Los días hasta el corte se identifican como **ya incluidos** y no se descuentan otra vez, aunque cargues el historial después del saldo.
+- Si una ausencia cruza el corte, se cuentan únicamente los días posteriores. Ejemplo: del 29/10 al 03/11, con corte 31/10, se descuentan 3 días.
+- El año del período es independiente del año de las fechas: es posible usar en 2026 días correspondientes a 2025.
+- Cambiar o cancelar vacaciones anteriores al corte **no modifica el saldo inicial declarado**. Si la corrección significa que el saldo real era otro, editá ese saldo y dejá el motivo. Cambiar o cancelar días posteriores sí recalcula el consumo.
+- El contador de utilizados de la nómina muestra el historial registrado completo. La ficha distingue los días ya incluidos, los utilizados posteriores y los reservados. Un saldo inicial puede usarse sin haber cargado todavía todo el historial previo.
+- Si hay vacaciones futuras aprobadas, el disponible puede ser menor que el saldo inicial: esas reservas se descuentan aparte. No las restes dos veces al cargar el saldo.
+- La asignación anual original se conserva, pero mientras haya un saldo inicial real no se suma a este ni determina el disponible.
+- Para otro año, cambiá el período dentro del formulario: se cargarán sus propios valores. No se copian automáticamente los saldos del año que estabas consultando.
+
+### Si conocés el total anual original
+
+Usá **Editar días asignados**, ingresá el total anual exacto, los ajustes y el motivo. Si **no hay saldo inicial real activo**, Clara restará todas las vacaciones disfrutadas/aprobadas y las reservas de ese período. Podés cargar las vacaciones antiguas con **Registrar vacaciones ya tomadas**.
+
+Si querés abandonar un saldo inicial real, abrí ese formulario y elegí **Volver al cálculo por asignación anual…**, confirmá y dejá un motivo. Esto conserva el historial y vuelve a descontarlo del total anual. Revisá primero que ese total sea correcto.
+
+### Actualizar una instalación Windows existente
+
+1. Desde la versión que estás usando, descargá una copia de seguridad. Cerrá el servidor con **Ctrl+C**.
+2. Descargá el ZIP actualizado de GitHub y descomprimilo en una carpeta temporal.
+3. Copiá los archivos del programa sobre tu carpeta de Clara. **Conservá tu carpeta `data` completa** (base de datos, clave y copias); no la borres ni la reemplaces. No copies bases de pruebas o de otras instalaciones.
+4. Abrí de nuevo **Iniciar-Clara.bat** y recargá la página del navegador (Ctrl+F5 si conserva la pantalla anterior).
+5. Se agrega automáticamente una tabla para los saldos iniciales. Los empleados, vacaciones, licencias, saldos anuales y usuarios existentes se conservan y siguen calculándose como antes hasta que cargues un saldo inicial explícito.
+
+Las copias de la primera versión también pueden restaurarse en esta versión. Restaurar una copia anterior al cambio no incluirá saldos iniciales que todavía no existían cuando se hizo esa copia. Las copias nuevas sí incluyen estos saldos. No restaures una copia nueva en una versión vieja del programa: desconocería el nuevo cálculo.
 
 ## Criterio orientativo de vacaciones
 
@@ -78,7 +118,9 @@ app.py                  Servidor, validaciones, persistencia y API
 static/app.js           Calendario y formularios interactivos
 static/style.css        Diseño adaptable e impresión
 templates/index.html    Interfaz sin recursos externos
-tests/test_app.py       Pruebas de integración y cálculos
+tests/test_app.py       Pruebas de las funciones existentes
+tests/test_opening.py   Pruebas de saldos iniciales, historial y migración
+tests/browser_opening.cjs  Prueba opcional del flujo en navegador
 Iniciar-Clara.bat        Iniciador Windows
 requirements.txt        Dependencias directas
 requirements-lock.txt   Versiones completas verificadas en Linux/Python 3.12
@@ -97,4 +139,4 @@ No se requiere Node para usar la aplicación. `node --check static/app.js` es un
 
 ## Alcance de esta primera entrega
 
-Incluye empleados, calendario, vacaciones, licencias, saldos por año, ajustes auditados, autenticación, roles, Excel, copias y restauración. No incluye integración con nómina/asistencia, cálculo automático del proporcional sin datos de trabajo efectivo, criterios alternativos a días corridos, adjuntos médicos, recuperación de contraseña por correo, un instalador ejecutable firmado ni configuración de la red corporativa. Toda eliminación de demostración o cancelación exige confirmación; los empleados normales se inactivan y las ausencias se cancelan para preservar el historial.
+Incluye empleados, calendario, vacaciones, licencias, saldos por año, saldos iniciales reales con corte e historial sin doble descuento, ajustes auditados, autenticación, roles, Excel, copias y restauración. No incluye integración con nómina/asistencia, cálculo automático del proporcional sin datos de trabajo efectivo, criterios alternativos a días corridos, adjuntos médicos, recuperación de contraseña por correo, un instalador ejecutable firmado ni configuración de la red corporativa. Toda eliminación de demostración o cancelación exige confirmación; los empleados normales se inactivan y las ausencias se cancelan para preservar el historial.

@@ -8,6 +8,8 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from openpyxl import Workbook, load_workbook
 
 TYPES = ['Vacaciones','Enfermedad','Estudio','Maternidad','Paternidad','Matrimonio','Fallecimiento de familiar','Trámites personales','Otras']
+OPENING_SCHEMA = '''CREATE TABLE IF NOT EXISTS opening_balances(employee INTEGER NOT NULL REFERENCES employees(id), year INTEGER NOT NULL CHECK(year BETWEEN 1900 AND 2200), cutoff TEXT NOT NULL, remaining REAL NOT NULL CHECK(remaining >= 0), reason TEXT NOT NULL, PRIMARY KEY(employee,year));'''
+
 STATES = ['Solicitadas','Aprobadas','Rechazadas','Canceladas','Disfrutadas']
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, username TEXT UNIQUE NOT NULL, password TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin','lectura')));
@@ -45,7 +47,7 @@ def create_app(data_dir=None):
     def close(_):
         if 'db' in g: g.db.close()
     with app.app_context():
-        db().executescript(SCHEMA)
+        db().executescript(SCHEMA + OPENING_SCHEMA)
         db().executemany('INSERT OR IGNORE INTO types(name) VALUES(?)',[(t,) for t in TYPES]);db().commit()
     def audit(action,detail=''):
         db().execute('INSERT INTO audit(at,actor,action,detail) VALUES(?,?,?,?)',(datetime.now().isoformat(timespec='seconds'),session.get('username','Inicialización'),action,str(detail)))
@@ -100,15 +102,24 @@ def create_app(data_dir=None):
         return jsonify(ok=True)
     @app.post('/api/logout')
     def logout(): session.clear();return jsonify(ok=True)
+    def chargeable(start,end,cutoff=None):
+        """Snapshot is the balance at the close of cutoff; only subsequent days consume it."""
+        if not cutoff: return days(start,end)
+        return max(0,(date.fromisoformat(end)-max(date.fromisoformat(start),date.fromisoformat(cutoff)+timedelta(days=1))).days+1)
+
     def balance(e,year):
         row=db().execute('SELECT * FROM balances WHERE employee=? AND year=?',(e['id'],year)).fetchone()
+        opening=db().execute('SELECT * FROM opening_balances WHERE employee=? AND year=?',(e['id'],year)).fetchone()
+        cutoff=opening['cutoff'] if opening else None
         suggestion=suggested(e['hired'],year); assigned=row['assigned'] if row else (suggestion or 0); adjustment=row['adjustment'] if row else 0
-        used=reserved=0
+        used=reserved=deducted_used=included_used=0
         for a in db().execute("SELECT * FROM absences WHERE employee=? AND year=? AND type='Vacaciones'",(e['id'],year)):
-            n=days(a['start'],a['end'])
-            if a['state']=='Disfrutadas' or (a['state']=='Aprobadas' and a['end']<date.today().isoformat()): used+=n
-            elif a['state']=='Aprobadas': reserved+=n
-        return dict(assigned=assigned,adjustment=adjustment,reason=row['reason'] if row else '',used=used,reserved=reserved,available=assigned+adjustment-used-reserved,suggested=suggestion,needs_review=suggestion is None and row is None)
+            n=days(a['start'],a['end']);charged=chargeable(a['start'],a['end'],cutoff)
+            if a['state']=='Disfrutadas' or (a['state']=='Aprobadas' and a['end']<date.today().isoformat()):
+                used+=n;deducted_used+=charged;included_used+=n-charged
+            elif a['state']=='Aprobadas': reserved+=charged
+        base=opening['remaining'] if opening else assigned+adjustment
+        return dict(assigned=assigned,adjustment=adjustment,reason=row['reason'] if row else '',used=used,reserved=reserved,available=base-deducted_used-reserved,suggested=suggestion,needs_review=suggestion is None and row is None and opening is None,opening=dict(opening) if opening else None,base=base,deducted_used=deducted_used,included_used=included_used)
     @app.get('/api/data')
     @auth()
     def data():
@@ -117,7 +128,12 @@ def create_app(data_dir=None):
         employees=[]
         for e in db().execute('SELECT * FROM employees ORDER BY last,first'):
             item=dict(e);item['balance']=balance(e,year);item['seniority']=max(0,(date.today()-date.fromisoformat(e['hired'])).days//365);employees.append(item)
-        absences=[dict(a,days=days(a['start'],a['end'])) for a in db().execute('SELECT * FROM absences ORDER BY start')]
+        openings={(o['employee'],o['year']):o['cutoff'] for o in db().execute('SELECT * FROM opening_balances')}
+        absences=[]
+        for a in db().execute('SELECT * FROM absences ORDER BY start'):
+            n=days(a['start'],a['end']);cutoff=openings.get((a['employee'],a['year'])) if a['type']=='Vacaciones' else None
+            charged=chargeable(a['start'],a['end'],cutoff) if a['type']=='Vacaciones' else 0
+            absences.append(dict(a,days=n,chargeable_days=charged,included_days=n-charged if cutoff else 0,cutoff=cutoff))
         today=date.today(); current=today.replace(day=1); following=(current.replace(day=28)+timedelta(days=4)).replace(day=1); after=(following.replace(day=28)+timedelta(days=4)).replace(day=1)
         def count(a,b):return len({r['employee'] for r in absences if r['type']=='Vacaciones' and r['state'] in ('Aprobadas','Disfrutadas') and r['start']<b.isoformat() and r['end']>=a.isoformat()})
         return jsonify(employees=employees,absences=absences,types=[dict(t) for t in db().execute('SELECT * FROM types ORDER BY name')],stats=dict(active=sum(e['active'] for e in employees),current=count(current,following),next=count(following,after)),today=today.isoformat())
@@ -142,6 +158,32 @@ def create_app(data_dir=None):
         if not math.isfinite(assigned) or not math.isfinite(adjustment) or assigned<0 or not 1900<=year<=2200:raise ValueError('Saldo o período inválido.')
         reason=required(p,'reason')
         db().execute('INSERT INTO balances VALUES(?,?,?,?,?) ON CONFLICT(employee,year) DO UPDATE SET assigned=excluded.assigned,adjustment=excluded.adjustment,reason=excluded.reason',(int(p['employee']),year,assigned,adjustment,reason));audit('Ajustar saldo',f"{p['employee']} / {year}: asignados {assigned}, ajuste {adjustment}, motivo {reason}");db().commit();return jsonify(ok=True)
+    @app.post('/api/opening-balances')
+    @auth(True)
+    def save_opening():
+        import math
+        p=request.get_json();eid=int(required(p,'employee'));year=int(required(p,'year'));reason=required(p,'reason')
+        if not 1900<=year<=2200:raise ValueError('Período anual inválido.')
+        db().execute('BEGIN IMMEDIATE')
+        e=db().execute('SELECT * FROM employees WHERE id=?',(eid,)).fetchone()
+        if not e:raise ValueError('El empleado no existe.')
+        previous=db().execute('SELECT * FROM opening_balances WHERE employee=? AND year=?',(eid,year)).fetchone()
+        before=balance(e,year)['available']
+        if p.get('clear'):
+            if p.get('confirm') is not True:raise ValueError('Confirmá el regreso al cálculo por asignación anual.')
+            db().execute('DELETE FROM opening_balances WHERE employee=? AND year=?',(eid,year))
+        else:
+            cutoff=required(p,'cutoff')
+            if date.fromisoformat(cutoff).isoformat()!=cutoff:raise ValueError('La fecha de corte debe usar el formato AAAA-MM-DD.')
+            if cutoff>date.today().isoformat() or cutoff<e['hired']:raise ValueError('La fecha de corte debe estar entre el ingreso y hoy.')
+            remaining=float(required(p,'remaining') if p.get('remaining') != 0 else '0')
+            if not math.isfinite(remaining) or remaining<0:raise ValueError('Los días restantes deben ser un número finito mayor o igual a cero.')
+            if p.get('confirm') is not True:raise ValueError('Confirmá que el saldo ya contempla las vacaciones hasta la fecha de corte y no descuenta reservas posteriores.')
+            db().execute('INSERT INTO opening_balances(employee,year,cutoff,remaining,reason) VALUES(?,?,?,?,?) ON CONFLICT(employee,year) DO UPDATE SET cutoff=excluded.cutoff,remaining=excluded.remaining,reason=excluded.reason',(eid,year,cutoff,remaining,reason))
+        after=balance(e,year)['available']
+        current=db().execute('SELECT * FROM opening_balances WHERE employee=? AND year=?',(eid,year)).fetchone()
+        audit('Actualizar saldo inicial',f'{eid} / {year}: anterior {dict(previous) if previous else None}; nuevo {dict(current) if current else None}; disponible {before} → {after}; motivo {reason}')
+        db().commit();return jsonify(ok=True,available=after)
     @app.post('/api/absences')
     @auth(True)
     def save_absence():
@@ -152,7 +194,7 @@ def create_app(data_dir=None):
         db().execute('BEGIN IMMEDIATE')
         e=db().execute('SELECT * FROM employees WHERE id=?',(eid,)).fetchone()
         if not e:raise ValueError('El empleado no existe.')
-        if not e['active'] and (not aid or state not in ('Canceladas','Rechazadas')):raise ValueError('Seleccioná un empleado activo para registrar ausencias.')
+        if not e['active'] and state!='Disfrutadas' and (not aid or state not in ('Canceladas','Rechazadas')):raise ValueError('Seleccioná un empleado activo para registrar ausencias.')
         if start<e['hired']:raise ValueError('La ausencia no puede comenzar antes del ingreso.')
         old=db().execute('SELECT * FROM absences WHERE id=?',(aid,)).fetchone()
         if aid and not old:abort(404)
@@ -161,6 +203,7 @@ def create_app(data_dir=None):
         if approved:date.fromisoformat(approved)
         if state=='Disfrutadas' and end>date.today().isoformat():raise ValueError('Una ausencia futura no puede marcarse disfrutada.')
         if state=='Aprobadas' and (not approved or not approver):raise ValueError('Indicá fecha y responsable de aprobación.')
+        if p.get('historical') and (kind!='Vacaciones' or state!='Disfrutadas' or end>date.today().isoformat()):raise ValueError('El historial debe ser de vacaciones ya disfrutadas, con fechas hasta hoy.')
         warnings=[]
         if state not in ('Rechazadas','Canceladas'):
             overlaps=db().execute("SELECT a.*,e.sector FROM absences a JOIN employees e ON e.id=a.employee WHERE a.id<>? AND a.state NOT IN ('Rechazadas','Canceladas') AND a.start<=? AND a.end>=?",(aid,end,start)).fetchall()
@@ -168,14 +211,16 @@ def create_app(data_dir=None):
             if any(a['sector']==e['sector'] for a in overlaps):warnings.append('Coincide con ausencias de otras personas del mismo sector.')
             if kind=='Vacaciones':
                 b=balance(e,year);available=b['available']
-                if old and old['employee']==eid and old['year']==year and old['type']=='Vacaciones' and old['state'] in ('Aprobadas','Disfrutadas'):available+=days(old['start'],old['end'])
-                if n>available:warnings.append(f"Solicitás {n} días y el saldo disponible es {available}.")
+                cutoff=b['opening']['cutoff'] if b['opening'] else None
+                n_charge=chargeable(start,end,cutoff)
+                if old and old['employee']==eid and old['year']==year and old['type']=='Vacaciones' and old['state'] in ('Aprobadas','Disfrutadas'):available+=chargeable(old['start'],old['end'],cutoff)
+                if n_charge>0 and n_charge>available:warnings.append(f"Este registro descuenta {n_charge} días y el saldo disponible es {available}.")
                 if b['needs_review']:warnings.append('Antigüedad insuficiente para sugerir el período completo: RR. HH. debe confirmar días trabajados y asignación proporcional (1 día por cada 20 efectivamente trabajados, si corresponde).')
         if warnings and not p.get('confirm'):return jsonify(warnings=warnings),409
         values=(eid,kind,year,start,end,state,requested,approved,approver,p.get('notes','')[:2000])
         if aid:db().execute('UPDATE absences SET employee=?,type=?,year=?,start=?,end=?,state=?,requested=?,approved=?,approver=?,notes=? WHERE id=?',values+(aid,))
         else:aid=db().execute('INSERT INTO absences(employee,type,year,start,end,state,requested,approved,approver,notes) VALUES(?,?,?,?,?,?,?,?,?,?)',values).lastrowid
-        audit('Guardar ausencia',f'{aid}: {kind}, {state}, {start} / {end}; excepciones: {warnings}');db().commit();return jsonify(id=aid)
+        audit('Guardar ausencia',f'{aid}: {kind}, {state}, {start} / {end}; días computables: {n_charge if kind=='Vacaciones' and state not in ('Rechazadas','Canceladas') else 0}; excepciones: {warnings}');db().commit();return jsonify(id=aid)
     @app.post('/api/types')
     @auth(True)
     def save_type():
@@ -194,17 +239,23 @@ def create_app(data_dir=None):
     @app.get('/api/audit')
     @auth(True)
     def log():return jsonify([dict(r) for r in db().execute('SELECT * FROM audit ORDER BY id DESC LIMIT 200')])
+    def opening_cutoff(a):
+        row=db().execute('SELECT cutoff FROM opening_balances WHERE employee=? AND year=?',(a['employee'],a['year'])).fetchone()
+        return row['cutoff'] if row else None
+    def included_in_opening(a):
+        cutoff=opening_cutoff(a)
+        return days(a['start'],a['end'])-chargeable(a['start'],a['end'],cutoff) if cutoff and a['type']=='Vacaciones' else 0
     @app.get('/api/export')
     @auth()
     def export():
         year=int(request.args.get('year',date.today().year))
         if not 1900<=year<=2200:raise ValueError('Período anual inválido.')
-        wb=Workbook();ws=wb.active;ws.title='Empleados y saldos';ws.append(['Código','Nombre','Apellido','Sector','Puesto','Ingreso','Activo','Período','Asignados','Ajustes','Utilizados','Reservados','Disponibles'])
+        wb=Workbook();ws=wb.active;ws.title='Empleados y saldos';ws.append(['Código','Nombre','Apellido','Sector','Puesto','Ingreso','Activo','Período','Asignados','Ajustes','Utilizados','Reservados','Disponibles','Saldo inicial real','Fecha de corte','Motivo saldo inicial','Utilizados incluidos en saldo inicial','Utilizados descontados'])
         for e in db().execute('SELECT * FROM employees'):
-            b=balance(e,year);ws.append([safe_cell(e[k]) for k in ['code','first','last','sector','position','hired']]+[e['active'],year]+[b[k] for k in ['assigned','adjustment','used','reserved','available']])
-        ws=wb.create_sheet('Ausencias');ws.append(['Empleado','Tipo','Período','Inicio','Fin','Días','Estado','Observaciones'])
+            b=balance(e,year);ws.append([safe_cell(e[k]) for k in ['code','first','last','sector','position','hired']]+[e['active'],year]+[b[k] for k in ['assigned','adjustment','used','reserved','available']]+[b['opening']['remaining'] if b['opening'] else None,b['opening']['cutoff'] if b['opening'] else '',safe_cell(b['opening']['reason']) if b['opening'] else '',b['included_used'],b['deducted_used']])
+        ws=wb.create_sheet('Ausencias');ws.append(['Empleado','Tipo','Período','Inicio','Fin','Días','Estado','Observaciones','Días incluidos en saldo inicial','Días computables posteriores al corte'])
         for a in db().execute('SELECT a.*,e.first,e.last FROM absences a JOIN employees e ON e.id=a.employee'):
-            ws.append([safe_cell(f"{a['first']} {a['last']}"),safe_cell(a['type']),a['year'],a['start'],a['end'],days(a['start'],a['end']),a['state'],safe_cell(a['notes'])])
+            ws.append([safe_cell(f"{a['first']} {a['last']}"),safe_cell(a['type']),a['year'],a['start'],a['end'],days(a['start'],a['end']),a['state'],safe_cell(a['notes']),included_in_opening(a),chargeable(a['start'],a['end'],opening_cutoff(a)) if a['type']=='Vacaciones' else 0])
         out=io.BytesIO();wb.save(out);out.seek(0);return send_file(out,as_attachment=True,download_name=f'RRHH-{year}.xlsx')
     @app.post('/api/import')
     @auth(True)
@@ -244,6 +295,12 @@ def create_app(data_dir=None):
             for table in ['users','employees','balances','absences','types','audit']:
                 wanted=[r[1:3] for r in current.execute(f'PRAGMA table_info({table})')];actual=[r[1:3] for r in candidate.execute(f'PRAGMA table_info({table})')]
                 if actual!=wanted:raise ValueError('La copia no es compatible con esta versión.')
+            # Older Clara backups have no opening table. Add only the new empty table.
+            candidate.execute(OPENING_SCHEMA)
+            wanted=[r[1:3] for r in current.execute('PRAGMA table_info(opening_balances)')]
+            actual=[r[1:3] for r in candidate.execute('PRAGMA table_info(opening_balances)')]
+            if actual!=wanted:raise ValueError('La copia no es compatible con los saldos iniciales.')
+            candidate.commit()
             if candidate.execute('PRAGMA foreign_key_check').fetchone():raise ValueError('La copia contiene referencias inválidas.')
             if not candidate.execute("SELECT 1 FROM users WHERE role='admin'").fetchone():raise ValueError('La copia no contiene administrador.')
             backup_path=root/f"antes-restaurar-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}.sqlite"
@@ -259,6 +316,7 @@ def create_app(data_dir=None):
         p=request.get_json()
         if p.get('delete'):
             if p.get('confirm')!='ELIMINAR DEMO':raise ValueError('Confirmación requerida.')
+            db().execute('DELETE FROM opening_balances WHERE employee IN (SELECT id FROM employees WHERE demo=1)')
             db().execute('DELETE FROM absences WHERE employee IN (SELECT id FROM employees WHERE demo=1)');db().execute('DELETE FROM balances WHERE employee IN (SELECT id FROM employees WHERE demo=1)');db().execute('DELETE FROM employees WHERE demo=1');audit('Eliminar demo')
         else:
             if db().execute('SELECT 1 FROM employees WHERE demo=1').fetchone():raise ValueError('Los datos de demostración ya están cargados.')

@@ -27,3 +27,19 @@ Servidor real Waitress sobre loopback, base temporal fuera del repositorio. Se v
 ## Límites
 
 No se ejecutó Windows ni se probó el archivo .bat en ese sistema. No se configuró una red corporativa, HTTPS, firewall ni servicio de Windows. No se realizaron pruebas de carga, una auditoría de seguridad independiente ni validación de convenio colectivo. La fórmula legal es orientativa; los casos proporcionales requieren asignación manual validada por RR. HH. Los procesos y bases de prueba no forman parte de la aplicación distribuida.
+
+
+## Ampliación: saldos iniciales e historial (6 de noviembre de 2026)
+
+El entorno volvió a estar disponible. Se verificó lectura del checkout y acceso Git al repositorio remoto antes de modificar archivos. Se conservan las nueve pruebas anteriores y se agregan ocho en `tests/test_opening.py` (17 en total):
+
+- Historial anterior al corte que no descuenta dos veces, incluidas edición y cancelación.
+- Registros posteriores y períodos que atraviesan el corte; validación del saldo al editar.
+- Saldo cero, reservas futuras y licencias sin consumo de vacaciones.
+- Aislamiento de años, asignación anual editable, regreso explícito al cálculo anual y auditoría.
+- Carga de historial antes o después de definir el saldo, modificación y persistencia.
+- Validaciones de saldo/fecha/confirmación, bloqueo de superposición y permisos de Gerencia.
+- Exportación con desglose, copia/restauración del nuevo saldo y retiro de demo.
+- Actualización de una base anterior y restauración de una copia anterior sin pérdida de su cálculo e historial.
+
+Prueba opcional reproducible en `tests/browser_opening.cjs`: requiere Playwright y Chromium como herramientas de desarrollo, sin agregarlas a las dependencias de la aplicación. Comando usado en Linux: `CHROMIUM_PATH=/usr/bin/chromium node tests/browser_opening.cjs`. El script inicia Waitress con una base temporal ficticia y la elimina al finalizar. Verifica alta, saldo real 7, historial previo sin descuento (sigue 7), consumo posterior de 3 días (queda 4), edición de la asignación de otro año sin mezclar saldos y ausencia de errores JavaScript. Se revisó la captura de la ficha con el desglose. Windows continúa pendiente de prueba directa.
