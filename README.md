@@ -48,7 +48,7 @@ En Empleados se filtran las filas de la nómina; en Vacaciones y licencias se fi
 
 Los indicadores laterales muestran **personas con ausencias** durante el mes actual y el siguiente, incluyendo vacaciones, estudio, trámites personales y cualquier otro tipo de licencia. Se desglosan vacaciones y licencias; el total cuenta cada persona una sola vez aunque tenga ambos tipos. Se incluyen Aprobadas y Disfrutadas; no Solicitadas, Rechazadas ni Canceladas.
 
-En Empleados hay una columna **Días de licencia (año)**. La ficha muestra utilizados, reservados, pendientes y el desglose por tipo. Se suman los días corridos dentro del año calendario seleccionado, recortando los registros que cruzan de año. Las pendientes se muestran aparte y no forman parte del total aprobado/disfrutado. Estos días no consumen ni alteran el saldo de vacaciones. Excel incluye las mismas columnas de licencias.
+La ficha del empleado muestra los días de licencia utilizados, reservados, pendientes y el desglose por tipo. La nómina resumida omite las columnas de sector/puesto y días de licencia, y usa los títulos Días utilizados, Días reservados y Días disponibles para sus columnas de vacaciones. Se suman los días corridos dentro del año calendario seleccionado, recortando los registros que cruzan de año. Las pendientes se muestran aparte y no forman parte del total aprobado/disfrutado. Estos días no consumen ni alteran el saldo de vacaciones. Excel incluye las mismas columnas de licencias.
 
 ### Importar la nómina que adjuntaste en tu computadora
 
