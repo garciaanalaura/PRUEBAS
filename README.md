@@ -42,7 +42,22 @@ Aplicación web interna para una empresa argentina. Python 3.12+, Flask, SQLite 
 
 Escribí un **nombre o apellido** y presioná **Buscar** o **Enter**. Se admiten coincidencias parciales, mayúsculas, espacios y nombres sin tildes (por ejemplo, `lucia` encuentra `Lucía`). También podés escribir apellido y nombre en cualquier orden. El identificador interno ya no se usa como criterio de búsqueda.
 
-En Empleados se filtran las filas de la nómina; en Vacaciones y licencias se filtran las tarjetas por el nombre o apellido de la persona. Cada sección conserva su propia búsqueda, sin aplicarla a las otras. Debajo se muestra la cantidad de resultados. **Limpiar** vuelve a mostrar los registros y quita los filtros de esa sección. En Empleados se mantienen las opciones de estado y ordenación; sector y tipo de ausencia se muestran solo donde corresponden al calendario o las ausencias.
+En Empleados se filtran las filas de la nómina; en Vacaciones y en Licencias se filtran sus respectivas tarjetas por el nombre o apellido de la persona. Cada sección conserva su propia búsqueda, sin aplicarla a las otras. Debajo se muestra la cantidad de resultados. **Limpiar** vuelve a mostrar los registros y quita los filtros de esa sección. En Empleados se mantienen las opciones de estado y ordenación; sector y tipo de ausencia se muestran solo donde corresponden al calendario o las ausencias.
+
+## Espacio de trabajo: Vacaciones y Licencias separadas
+
+En el menú hay dos secciones independientes:
+
+- **Vacaciones:** incluye únicamente registros de tipo Vacaciones. Muestra por empleado la base del saldo, días utilizados, reservados y disponibles, más el historial del **período anual** seleccionado. El formulario de esta sección solo permite vacaciones. El saldo inicial y los ajustes se conservan y pueden editarse desde la ficha.
+- **Licencias:** incluye todos los demás tipos (estudio, enfermedad, trámites personales, etc.). Muestra por empleado los días utilizados, reservados, pendientes y el total aprobado/disfrutado del **año calendario** seleccionado. No tiene una bolsa general de vacaciones ni descuenta sus días de ella. El formulario excluye el tipo Vacaciones.
+
+Cada sección tiene su propia búsqueda por nombre/apellido y filtro de sector. Licencias también permite filtrar por tipo; sus totales se recalculan con esos filtros. El botón Excel exporta solo la sección abierta. Desde Empleados o Calendario, Excel conserva la exportación general.
+
+**Ejemplo:** una licencia aprobada de estudio del 9 al 12 de noviembre suma **4 días reservados en Licencias**, y deja intacto el disponible de vacaciones. Lo mismo ocurre con trámites personales y enfermedad. Cuando termina, pasa al conteo de utilizados. Las pendientes se muestran aparte; las rechazadas o canceladas no suman al total.
+
+El **Calendario** sigue reuniendo vacaciones y licencias con sus colores para conocer todas las ausencias. Los indicadores laterales también incluyen ambas. La nómina de **Empleados** conserva sus columnas de vacaciones y lo aclara expresamente; para ver los otros días, abrí Licencias. La ficha conserva ambos historiales separados.
+
+Los registros existentes aparecen automáticamente en la sección que corresponde a su tipo. No hay que volver a cargarlos ni modificar la base para separarlos. Para actualizar esta versión, reemplazá `app.py`, `static/app.js`, `static/style.css` y `templates/index.html`, conservá `data` y reiniciá Corevia.
 
 ## Totales de licencias y nómina
 

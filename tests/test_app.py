@@ -189,4 +189,17 @@ class AppTests(unittest.TestCase):
         result=self.app.test_cli_runner().invoke(args=['import-roster',str(path),'--skip-existing'])
         self.assertEqual(result.exit_code,0,result.output);self.assertIn('existentes omitidos: 2',result.output)
 
+    def test_separate_vacation_and_license_exports(self):
+        self.assertEqual(self.absence(start=f'{self.year}-01-05',end=f'{self.year}-01-06').status_code,200)
+        self.assertEqual(self.absence(type='Estudio',start=f'{self.year}-02-01',end=f'{self.year}-02-04').status_code,200)
+        for scope,kind in [('vacations','Vacaciones'),('leaves','Estudio')]:
+            r=self.c.get(f'/api/export?year={self.year}&scope={scope}');self.assertEqual(r.status_code,200)
+            book=load_workbook(io.BytesIO(r.data));rows=list(book['Ausencias'].values)
+            self.assertEqual(len(rows),2);self.assertEqual(rows[1][1],kind)
+            if scope=='leaves':
+                self.assertEqual(book.active.title,'Resumen licencias');self.assertEqual(book.active.cell(2,8).value,4)
+                self.assertNotIn('Asignados',[c.value for c in book.active[1]])
+            else:self.assertNotIn('Días licencia año',[c.value for c in book.active[1]])
+        self.assertEqual(self.c.get('/api/export?scope=invalid').status_code,400)
+
 if __name__=='__main__':unittest.main()

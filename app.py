@@ -323,13 +323,24 @@ def create_app(data_dir=None):
     def export():
         year=int(request.args.get('year',date.today().year))
         if not 1900<=year<=2200:raise ValueError('Período anual inválido.')
+        scope=request.args.get('scope','all')
+        if scope not in ('all','vacations','leaves'):raise ValueError('Sección de exportación inválida.')
         wb=Workbook();ws=wb.active;ws.title='Empleados y saldos';ws.append(['Código','Nombre','Apellido','Sector','Puesto','Ingreso','Activo','Período','Asignados','Ajustes','Utilizados','Reservados','Disponibles','Saldo inicial real','Fecha de corte','Motivo saldo inicial','Utilizados incluidos en saldo inicial','Utilizados descontados','Adquiridos al cómputo','Fecha de cómputo','Proyección al cierre','Días computables','Origen cómputo','Días licencia año','Licencias utilizadas','Licencias reservadas','Licencias pendientes'])
         for e in db().execute('SELECT * FROM employees'):
             b=balance(e,year);leave=leave_summary(e['id'],year);ws.append([safe_cell(e[k]) for k in ['code','first','last','sector','position','hired']]+[e['active'],year]+[b[k] for k in ['assigned','adjustment','used','reserved','available']]+[b['opening']['remaining'] if b['opening'] else None,b['opening']['cutoff'] if b['opening'] else '',safe_cell(b['opening']['reason']) if b['opening'] else '',b['included_used'],b['deducted_used'],b['accrual']['acquired'],b['accrual']['asof'],b['accrual']['projected_closing'],b['accrual']['worked_days'],'Manual' if b['accrual']['manual'] else b['accrual']['source']]+[leave[k] for k in ['total','used','reserved','pending']])
+        if scope=='leaves':
+            wb.remove(ws);ws=wb.create_sheet('Resumen licencias');ws.append(['Código','Nombre','Apellido','Año calendario','Días utilizados','Días reservados','Pendientes','Total aprobado / disfrutado'])
+            for e in db().execute('SELECT * FROM employees ORDER BY last,first'):
+                leave=leave_summary(e['id'],year)
+                ws.append([safe_cell(e[k]) for k in ['code','first','last']]+[year]+[leave[k] for k in ['used','reserved','pending','total']])
+        elif scope=='vacations':
+            ws.delete_cols(24,4)
         ws=wb.create_sheet('Ausencias');ws.append(['Empleado','Tipo','Período','Inicio','Fin','Días','Estado','Observaciones','Días incluidos en saldo inicial','Días computables posteriores al corte'])
         for a in db().execute('SELECT a.*,e.first,e.last FROM absences a JOIN employees e ON e.id=a.employee'):
+            if scope=='vacations' and (a['type']!='Vacaciones' or a['year']!=year):continue
+            if scope=='leaves' and (a['type']=='Vacaciones' or a['start']>f'{year}-12-31' or a['end']<f'{year}-01-01'):continue
             ws.append([safe_cell(f"{a['first']} {a['last']}"),safe_cell(a['type']),a['year'],a['start'],a['end'],days(a['start'],a['end']),a['state'],safe_cell(a['notes']),included_in_opening(a),chargeable(a['start'],a['end'],opening_cutoff(a)) if a['type']=='Vacaciones' else 0])
-        out=io.BytesIO();wb.save(out);out.seek(0);return send_file(out,as_attachment=True,download_name=f'RRHH-{year}.xlsx')
+        out=io.BytesIO();wb.save(out);out.seek(0);return send_file(out,as_attachment=True,download_name=f'RRHH-{scope}-{year}.xlsx')
     def import_roster(upload,skip_existing=False):
         try:
             wb=load_workbook(upload,read_only=True,data_only=True)

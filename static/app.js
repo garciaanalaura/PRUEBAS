@@ -1,7 +1,7 @@
 'use strict';
 const $=s=>document.querySelector(s), csrf=$('meta[name=csrf]').content;
 let state={},user={},shown=new Date(),view='calendar';
-const searches={calendar:{query:'',sector:'',type:''},employees:{query:''},absences:{query:'',sector:'',type:''}};
+const searches={calendar:{query:'',sector:'',type:''},employees:{query:''},absences:{query:'',sector:'',type:''},leaves:{query:'',sector:'',type:''}};
 const normalizeName=value=>String(value??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('es-AR').trim().replace(/\s+/g,' ');
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const iso=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
@@ -19,7 +19,7 @@ async function init(){try{user=await api('session');$('#auth').hidden=!!user.use
 $('#login').onsubmit=async e=>{e.preventDefault();const p=Object.fromEntries(new FormData(e.target));try{if(user.setup)await api('setup',p);await api('login',p);await init();}catch(err){$('#auth-error').textContent=err.message;}};
 $('#logout').onclick=async()=>{await api('logout',{});location.reload();};
 $('#year').value=new Date().getFullYear();
-async function refresh(){state=await api('data?year='+$('#year').value);const sector=$('#sector').value;$('#sector').innerHTML=opt('','Todos los sectores')+[...new Set(state.employees.map(e=>e.sector))].sort().map(s=>opt(s,s,s===sector)).join('');const type=$('#type').value;$('#type').innerHTML=opt('','Todos los tipos')+state.types.map(t=>opt(t.name,t.name,t.name===type)).join('');for(const k of ['active','current','next'])$('#stat-'+k).textContent=state.stats[k];for(const key of ['current','next'])$('#stat-'+key+'-detail').textContent=`${state.stats[key+'_detail'].vacations} vacaciones · ${state.stats[key+'_detail'].leaves} licencias`;render();}
+async function refresh(){state=await api('data?year='+$('#year').value);const sector=$('#sector').value;$('#sector').innerHTML=opt('','Todos los sectores')+[...new Set(state.employees.map(e=>e.sector))].sort().map(s=>opt(s,s,s===sector)).join('');populateTypeFilter();for(const k of ['active','current','next'])$('#stat-'+k).textContent=state.stats[k];for(const key of ['current','next'])$('#stat-'+key+'-detail').textContent=`${state.stats[key+'_detail'].vacations} vacaciones · ${state.stats[key+'_detail'].leaves} licencias`;render();}
 function matches(e,target){
   if(!e)return false;
   const filters=searches[target],name=normalizeName(full(e)),words=normalizeName(filters.query).split(' ').filter(Boolean);
@@ -27,7 +27,8 @@ function matches(e,target){
 }
 function filteredAbsences(target='absences'){
   const filters=searches[target];
-  return state.absences.filter(a=>matches(person(a.employee),target)&&(!filters.type||a.type===filters.type));
+  const year=Number($('#year').value);
+  return state.absences.filter(a=>matches(person(a.employee),target)&&(!filters.type||a.type===filters.type)&&(target==='absences'?a.type==='Vacaciones'&&a.year===year:target==='leaves'?a.type!=='Vacaciones'&&a.start<=year+'-12-31'&&a.end>=year+'-01-01':true));
 }
 function employeeResults(){
   return state.employees.filter(e=>matches(e,'employees')&&($('#active-filter').value===''||String(e.active)===$('#active-filter').value));
@@ -37,7 +38,7 @@ function renderSearchStatus(){
   const q=searches[view].query;
   let count;
   if(view==='employees')count=employeeResults().length;
-  else if(view==='absences')count=filteredAbsences().length;
+  else if(view==='absences'||view==='leaves')count=filteredAbsences(view).length;
   else{
     const first=iso(new Date(shown.getFullYear(),shown.getMonth(),1)),last=iso(new Date(shown.getFullYear(),shown.getMonth()+1,0));
     count=filteredAbsences('calendar').filter(a=>!['Canceladas','Rechazadas'].includes(a.state)&&a.start<=last&&a.end>=first).length;
@@ -45,11 +46,33 @@ function renderSearchStatus(){
   const noun=view==='employees'?(count===1?'empleado':'empleados'):(count===1?'ausencia':'ausencias');
   $('#search-status').textContent=`Resultados: ${count} ${noun}${q?' para «'+q+'»':''}.`;
 }
-function render(){renderCalendar();renderEmployees();renderAbsences();renderTypes();renderSearchStatus();}
+function render(){renderCalendar();renderEmployees();renderAbsences();renderLeaves();renderTypes();renderSearchStatus();}
 function renderCalendar(){const y=shown.getFullYear(),m=shown.getMonth();$('#month-title').textContent=shown.toLocaleDateString('es-AR',{month:'long',year:'numeric'});$('#month').value=`${y}-${String(m+1).padStart(2,'0')}`;const first=new Date(y,m,1),begin=new Date(y,m,1-(first.getDay()+6)%7),last=new Date(y,m+1,0);let html='';const records=filteredAbsences('calendar').filter(a=>!['Canceladas','Rechazadas'].includes(a.state));for(let w=0;w<6;w++){const ws=new Date(begin);ws.setDate(begin.getDate()+7*w);if(ws>last)break;const dates=Array.from({length:7},(_,i)=>{let d=new Date(ws);d.setDate(ws.getDate()+i);return d;});const start=iso(dates[0]),end=iso(dates[6]);let lanes=[],bars=[];const week=records.filter(a=>a.start<=end&&a.end>=start).sort((a,b)=>a.start.localeCompare(b.start)||a.id-b.id);for(const a of week){let l=dates.findIndex(d=>iso(d)>=a.start);if(l<0)l=0;let r=6;for(let i=6;i>=0;i--)if(iso(dates[i])<=a.end){r=i;break;}let lane=0;while(lanes[lane]?.some(([x,z])=>l<=z&&r>=x))lane++;(lanes[lane]??=[]).push([l,r]);bars.push({a,l,r,lane});}html+='<div class="week">'+dates.map((d,i)=>`<div style="grid-column:${i+1}" class="day ${d.getMonth()!==m?'outside':''} ${[0,6].includes(d.getDay())?'weekend':''}"><span class="date ${iso(d)===state.today?'today':''}">${d.getDate()}</span></div>`).join('')+'<div class="events">';for(const b of bars.filter(b=>b.lane<3)){const e=person(b.a.employee);html+=`<button class="event ${b.a.state==='Solicitadas'?'pending':b.a.type==='Vacaciones'?'':'leave'}" style="grid-column:${b.l+1}/${b.r+2};grid-row:${b.lane+1}" data-absence="${b.a.id}" title="${esc(full(e)+' · '+b.a.type)}">${esc(full(e))}</button>`;}dates.forEach((d,i)=>{const hidden=bars.filter(b=>b.lane>=3&&b.l<=i&&b.r>=i);if(hidden.length)html+=`<button class="event more" style="grid-column:${i+1};grid-row:4" data-day="${iso(d)}">+${hidden.length} más</button>`;});html+='</div></div>';}$('#calendar').innerHTML=html;bindAbsences($('#calendar'));document.querySelectorAll('[data-day]').forEach(b=>b.onclick=()=>{modal('Ausencias · '+fmt(b.dataset.day),records.filter(a=>a.start<=b.dataset.day&&a.end>=b.dataset.day).map(card).join(''));bindAbsences($('#modal-body'));});}
 function card(a){const e=person(a.employee);return `<button class="card absence-card" data-absence="${a.id}"><div class="person"><span class="avatar">${esc(initials(e))}</span><div><strong>${esc(full(e))}</strong><br><small>${esc(e.sector)}</small></div></div><span class="badge ${a.type==='Vacaciones'?'':'license'}">${esc(a.type)}</span><br><small>${fmt(a.start)} → ${fmt(a.end)} · ${a.days} días</small><br><small>${esc(a.state)} · Período ${a.year}</small>${a.included_days?`<br><small>${a.included_days} días incluidos en saldo inicial · no se vuelven a descontar</small>`:''}</button>`;}
 function bindAbsences(root){root.querySelectorAll('[data-absence]').forEach(b=>b.onclick=()=>absenceDetail(Number(b.dataset.absence)));}
-function renderAbsences(){$('#absences').innerHTML=filteredAbsences().slice().reverse().map(card).join('')||'<p class="empty">Todavía no hay ausencias para estos filtros.</p>';bindAbsences($('#absences'));}
+function personCell(e){return `<button class="name-button person" data-summary-employee="${e.id}"><span class="avatar">${esc(initials(e))}</span><span>${esc(full(e))}<small>${esc(e.code)}</small></span></button>`;}
+function bindSummary(root){root.querySelectorAll('[data-summary-employee]').forEach(b=>b.onclick=()=>employeeDetail(Number(b.dataset.summaryEmployee)));}
+function renderAbsences(){
+  $('#absences').innerHTML=filteredAbsences().slice().reverse().map(card).join('')||'<p class="empty">Sin vacaciones para este período y búsqueda.</p>';bindAbsences($('#absences'));
+  $('#vacation-balances').innerHTML=state.employees.filter(e=>matches(e,'absences')).map(e=>{const b=e.balance;return `<tr><td>${personCell(e)}</td><td>${b.base} días${b.opening?`<br><small>Saldo inicial al ${fmt(b.opening.cutoff)}</small>`:'<br><small>Asignación + ajustes</small>'}</td><td>${b.used}</td><td>${b.reserved}</td><td><span class="badge">${b.available} días</span></td></tr>`;}).join('')||'<tr><td colspan="5" class="empty">Sin empleados para esta búsqueda.</td></tr>';bindSummary($('#vacation-balances'));
+}
+function renderLeaves(){
+  const records=filteredAbsences('leaves'),year=Number($('#year').value),totals={used:0,reserved:0,pending:0,total:0};
+  const rows=state.employees.filter(e=>matches(e,'leaves')).map(e=>{
+    const counts={used:0,reserved:0,pending:0,total:0};
+    for(const a of records.filter(a=>a.employee===e.id)){
+      if(!['Aprobadas','Disfrutadas','Solicitadas'].includes(a.state))continue;
+      const start=a.start>year+'-01-01'?a.start:year+'-01-01',end=a.end<year+'-12-31'?a.end:year+'-12-31';
+      const days=Math.round((new Date(end+'T12:00:00Z')-new Date(start+'T12:00:00Z'))/86400000)+1;
+      const key=a.state==='Solicitadas'?'pending':a.state==='Disfrutadas'||a.end<state.today?'used':'reserved';counts[key]+=days;if(key!=='pending')counts.total+=days;
+    }
+    for(const key of Object.keys(totals))totals[key]+=counts[key];
+    return `<tr><td>${personCell(e)}</td><td>${counts.used}</td><td>${counts.reserved}</td><td>${counts.pending}</td><td><span class="badge license">${counts.total} días</span></td></tr>`;
+  });
+  $('#leave-balances').innerHTML=rows.join('')||'<tr><td colspan="5" class="empty">Sin empleados para esta búsqueda.</td></tr>';
+  $('#leave-totals').innerHTML=[['Utilizados',totals.used],['Reservados',totals.reserved],['Pendientes (aparte)',totals.pending],['Total aprobado / disfrutado',totals.total]].map(([label,n])=>`<div><small>${label}</small><strong>${n} días</strong></div>`).join('');
+  $('#leaves').innerHTML=records.slice().reverse().map(card).join('')||'<p class="empty">Sin licencias para este año y búsqueda.</p>';bindAbsences($('#leaves'));bindSummary($('#leave-balances'));
+}
 function renderEmployees(){let rows=employeeResults();const sort=$('#sort').value;rows.sort((a,b)=>sort==='available'?a.balance.available-b.balance.available:String(a[sort]).localeCompare(String(b[sort])));$('#employees').innerHTML=rows.map(e=>`<tr><td><button class="name-button person" data-employee="${e.id}"><span class="avatar">${esc(initials(e))}</span><span><strong>${esc(full(e))}</strong><small>${esc(e.code)} · ${e.active?'Activo':'Inactivo'}${e.demo?' · DEMO':''}</small></span></button></td><td>${fmt(e.hired)}<br><small>${e.seniority} años</small></td><td>${admin()?`<button class="name-button" data-accrual="${e.id}" title="Editar adquiridos y días del período">${e.balance.accrual.acquired} días ✎</button>`:`${e.balance.accrual.acquired} días`}<br><small>${e.balance.accrual.manual?'Manual':'Orientativo'} al ${fmt(e.balance.accrual.asof)}</small></td><td>${e.balance.accrual.assigned_manual?e.balance.assigned:e.balance.accrual.projected_closing} días<br><small>${e.balance.accrual.assigned_manual?'Asignación manual':'Proyección al 31/12'}</small></td><td>${e.balance.opening?`Saldo inicial: ${e.balance.opening.remaining}<br><small>Al ${fmt(e.balance.opening.cutoff)}</small>`:`${e.balance.assigned} + ${e.balance.adjustment}`}${e.balance.needs_review?' ⚠ Revisar':''}</td><td>${e.balance.used}</td><td>${e.balance.reserved}</td><td><span class="badge">${e.balance.available} días</span></td></tr>`).join('')||`<tr><td colspan="8" class="empty">${state.employees.length?'No se encontraron empleados con ese nombre o apellido y estado. Usá Limpiar o revisá el filtro de estado.':'Tu nómina empieza aquí. Agregá empleados o cargá la demostración desde Administración.'}</td></tr>`;document.querySelectorAll('[data-employee]').forEach(b=>b.onclick=()=>employeeDetail(Number(b.dataset.employee)));document.querySelectorAll('[data-accrual]').forEach(b=>b.onclick=()=>accrualForm(person(Number(b.dataset.accrual)),$('#year').value,person(Number(b.dataset.accrual)).balance));}
 function employeeForm(e={active:1}){form(e.id?'Editar empleado':'Nuevo empleado',field('Identificador interno','code',e.code,'text','required')+field('Nombre','first',e.first,'text','required')+field('Apellido','last',e.last,'text','required')+field('Sector','sector',e.sector,'text','required')+field('Puesto','position',e.position,'text','required')+field('Fecha de ingreso','hired',e.hired,'date','required')+`<label>Estado<select name="active">${opt('1','Activo',!!e.active)+opt('0','Inactivo',!e.active)}</select></label><label class="full">Observaciones<textarea name="notes">${esc(e.notes)}</textarea></label>`,p=>api('employees',{...p,id:e.id,active:p.active==='1'}));}
 function accrualForm(e,year,b){
@@ -78,8 +101,8 @@ function employeeDetail(id){
     $('#edit-person').onclick=()=>employeeForm(e);
     $('#edit-balance').onclick=()=>annualBalanceForm(e,year,b);
     $('#opening-balance').onclick=()=>openingBalanceForm(e,year,b);
-    $('#employee-planned').onclick=()=>absenceForm({employee:id,type:'Vacaciones',year,state:'Solicitadas',requested:state.today});
-    $('#employee-history').onclick=()=>absenceForm({employee:id,type:'Vacaciones',year,state:'Disfrutadas',requested:state.today},true);
+    $('#employee-planned').onclick=()=>absenceForm({employee:id,type:'Vacaciones',year,state:'Solicitadas',requested:state.today},false,'vacations');
+    $('#employee-history').onclick=()=>absenceForm({employee:id,type:'Vacaciones',year,state:'Disfrutadas',requested:state.today},true,'vacations');
   }
 }
 function balanceYearLoader(e,apply){
@@ -110,13 +133,16 @@ function openingBalanceForm(e,year,b){
   $('#clear-opening').onclick=()=>{const year=$('#editor').elements.year.value;if(!confirm('¿Volver al cálculo anual? Se restarán todas las vacaciones tomadas del período, incluidas las anteriores al corte. El historial se conserva.'))return;form('Volver al cálculo anual',field('Período anual','year',year,'number','required readonly')+field('Motivo del cambio','reason','','text','required'),async p=>{await api('opening-balances',{...p,employee:e.id,clear:true,confirm:true});$('#year').value=p.year;});};
 }
 function absenceDetail(id){const a=state.absences.find(a=>a.id===id),e=person(a.employee);modal(full(e),`<p><span class="badge ${a.type==='Vacaciones'?'':'license'}">${esc(a.type)}</span> · ${esc(e.sector)}</p><div class="detail-grid">${[['Inicio',fmt(a.start)],['Finalización',fmt(a.end)],['Días corridos',a.days],['Período anual',a.year],['Estado',a.state],['Solicitud',fmt(a.requested)],['Aprobación',fmt(a.approved)],['Responsable',a.approver||'—'],...(a.cutoff&&a.type==='Vacaciones'?[['Ya incluidos al corte',a.included_days+' días'],['Computables posteriores',a.chargeable_days+' días']]:[])].map(([k,v])=>`<div><small>${k}</small>${esc(v)}</div>`).join('')}</div><p>${esc(a.notes||'Sin observaciones.')}</p>${admin()?'<div class="actions"><button id="cancel-absence" class="danger">Cancelar registro</button><button id="edit-absence" class="primary">Editar</button></div>':''}`);if(admin()){$('#edit-absence').onclick=()=>absenceForm(a);$('#cancel-absence').onclick=async()=>{if(!confirm('¿Cancelar esta ausencia? Se conservará en el historial. Solo se liberarán los días que Corevia estuviera descontando; los días ya incluidos en un saldo inicial no lo modifican.'))return;try{await api('absences',{...a,state:'Canceladas',confirm:true});$('#modal').close();await refresh();notice('Ausencia cancelada.');}catch(err){notice(err.message,true);}};}}
-function absenceForm(a={type:'Vacaciones',year:$('#year').value,state:'Solicitadas',requested:state.today},historical=false){
+function absenceForm(a={type:'Vacaciones',year:$('#year').value,state:'Solicitadas',requested:state.today},historical=false,category=null){
+  category=category||(a.id?(a.type==='Vacaciones'?'vacations':'leaves'):view==='leaves'?'leaves':view==='absences'?'vacations':'all');
+  if(category==='leaves'){historical=false;if(a.type==='Vacaciones')a={...a,type:state.types.find(t=>t.active&&t.name!=='Vacaciones')?.name};}
+  if(category==='vacations')a={...a,type:'Vacaciones'};
   const employees=state.employees.filter(e=>e.active||historical||e.id===a.employee);
   if(!employees.length){notice('Primero agregá un empleado activo.',true);return;}
-  form(a.id?'Editar ausencia':historical?'Registrar vacaciones ya tomadas':'Registrar vacaciones o licencias',
-    `<label class="full">¿Qué querés registrar?<select name="entry_mode">${opt('normal','Vacaciones futuras / solicitudes / licencias',!historical)+opt('historical','Vacaciones ya tomadas (hasta hoy)',historical)}</select></label><p class="opening-note full">${historical?'Este modo es solo para vacaciones ya disfrutadas y admite fechas hasta hoy. Para cargar diciembre u otras fechas futuras, elegí «Vacaciones futuras / solicitudes / licencias» arriba; se conservarán los datos que ingresaste.':'Podés seleccionar fechas futuras tanto en Desde como en Hasta. Usá Solicitadas si están pendientes o Aprobadas para reservar días; Disfrutadas corresponde únicamente a vacaciones que ya terminaron.'}</p>`+
-    `<label>Empleado<select name="employee">${employees.map(e=>opt(e.id,full(e)+' · '+e.sector,e.id===Number(a.employee))).join('')}</select></label><label>Tipo<select name="type">${state.types.filter(t=>(t.active||t.name===a.type)&&(!historical||t.name==='Vacaciones')).map(t=>opt(t.name,t.name,t.name===a.type)).join('')}</select></label>`+
-    field('Período anual','year',a.year,'number','required min="1900" max="2200"')+
+  form(a.id?'Editar ausencia':category==='leaves'?'Registrar licencia':historical?'Registrar vacaciones ya tomadas':category==='vacations'?'Registrar vacaciones':'Registrar vacaciones o licencias',
+    `<label class="full" ${category==='leaves'?'hidden':''}>¿Qué querés registrar?<select name="entry_mode">${opt('normal',category==='vacations'?'Vacaciones futuras / solicitudes':'Vacaciones futuras / solicitudes / licencias',!historical)+opt('historical','Vacaciones ya tomadas (hasta hoy)',historical)}</select></label><p class="opening-note full">${category==='leaves'?'Esta licencia registra una ausencia y no descuenta vacaciones. Puede ser pasada o futura; elegí el estado correspondiente.':historical?'Este modo es solo para vacaciones ya disfrutadas y admite fechas hasta hoy. Para cargar diciembre u otras fechas futuras, elegí «Vacaciones futuras / solicitudes / licencias» arriba; se conservarán los datos que ingresaste.':'Podés seleccionar fechas futuras tanto en Desde como en Hasta. Usá Solicitadas si están pendientes o Aprobadas para reservar días; Disfrutadas corresponde únicamente a vacaciones que ya terminaron.'}</p>`+
+    `<label>Empleado<select name="employee">${employees.map(e=>opt(e.id,full(e)+' · '+e.sector,e.id===Number(a.employee))).join('')}</select></label><label>Tipo<select name="type">${state.types.filter(t=>(t.active||t.name===a.type)&&(!historical||t.name==='Vacaciones')&&(category==='leaves'?t.name!=='Vacaciones':category==='vacations'?t.name==='Vacaciones':true)).map(t=>opt(t.name,t.name,t.name===a.type)).join('')}</select></label>`+
+    field(category==='leaves'?'Año de referencia (el conteo usa las fechas)':'Período anual','year',a.year,'number','required min="1900" max="2200"')+
     `<label>Estado<select name="state">${(historical?['Disfrutadas']:['Solicitadas','Aprobadas','Disfrutadas','Rechazadas','Canceladas']).map(s=>opt(s,s,s===a.state)).join('')}</select></label>`+
     field('Desde','start',a.start,'date',historical?`required max="${state.today}"`:'required')+
     field('Hasta (inclusive)','end',a.end,'date',historical?`required max="${state.today}"`:'required')+
@@ -135,25 +161,30 @@ function absenceForm(a={type:'Vacaciones',year:$('#year').value,state:'Solicitad
   f.elements.start.onchange=calc;f.elements.end.onchange=calc;calc();
   f.elements.entry_mode.onchange=()=>{
     const values=Object.fromEntries(new FormData(f)),past=values.entry_mode==='historical';
-    absenceForm({...a,...values,employee:Number(values.employee),state:past?'Disfrutadas':values.state==='Disfrutadas'?'Solicitadas':values.state,type:past?'Vacaciones':values.type},past);
+    absenceForm({...a,...values,employee:Number(values.employee),state:past?'Disfrutadas':values.state==='Disfrutadas'?'Solicitadas':values.state,type:past?'Vacaciones':values.type},past,category);
   };
 }
 function renderTypes(){$('#types').innerHTML=state.types.map(t=>`<p>${esc(t.name)} ${!t.active?'(inactivo)':''} ${t.name!=='Vacaciones'&&admin()?`<button data-type="${esc(t.name)}">Editar</button>`:''}</p>`).join('');document.querySelectorAll('[data-type]').forEach(b=>b.onclick=()=>typeForm(state.types.find(t=>t.name===b.dataset.type)));}
 function typeForm(t={active:1}){form('Tipo de licencia',field('Nombre','name',t.name,'text','required')+`<label>Estado<select name="active">${opt('1','Activo',!!t.active)+opt('0','Inactivo',!t.active)}</select></label>`,p=>api('types',{...p,old:t.name,active:p.active==='1'}));}
+function populateTypeFilter(){
+  const selected=searches[view]?.type||'';
+  $('#type').innerHTML=opt('','Todos los tipos')+state.types.filter(t=>view!=='leaves'||t.name!=='Vacaciones').map(t=>opt(t.name,t.name,t.name===selected)).join('');
+}
 function restoreSearchControls(){
   const filters=searches[view];
   $('#search-form').closest('.toolbar').hidden=!filters;
   $('#search-status').hidden=!filters;
   if(!filters)return;
   $('#search').value=filters.query;
-  $('#sector').hidden=view==='employees';$('#type').hidden=view==='employees';
+  populateTypeFilter();$('#sector').hidden=view==='employees';$('#type').hidden=view==='employees'||view==='absences';
   $('#sector').value=filters.sector||'';$('#type').value=filters.type||'';
 }
 for(const b of document.querySelectorAll('[data-view]'))b.onclick=()=>{
   view=b.dataset.view;
-  for(const v of ['calendar','employees','absences','settings'])$('#'+v+'-view').hidden=v!==view;
+  for(const v of ['calendar','employees','absences','leaves','settings'])$('#'+v+'-view').hidden=v!==view;
   document.querySelectorAll('[data-view]').forEach(x=>x.classList.toggle('selected',x===b));
-  $('#view-title').textContent={calendar:'Calendario de ausencias',employees:'Tu equipo, en un solo lugar',absences:'Vacaciones y licencias',settings:'Administración del espacio'}[view];
+  $('#view-title').textContent={calendar:'Calendario de ausencias',employees:'Tu equipo, en un solo lugar',absences:'Vacaciones',leaves:'Licencias',settings:'Administración del espacio'}[view];
+  $('#new-absence').textContent=view==='leaves'?'＋ Registrar licencia':view==='absences'?'＋ Registrar vacaciones':'＋ Registrar vacaciones / licencias';
   restoreSearchControls();renderSearchStatus();
 };
 $('#search-form').onsubmit=e=>{
@@ -173,7 +204,8 @@ for(const selector of ['#active-filter','#sort'])$(selector).addEventListener('c
 $('#year').onchange=()=>refresh().catch(e=>notice(e.message,true));
 $('#prev').onclick=()=>{shown=new Date(shown.getFullYear(),shown.getMonth()-1,1);renderCalendar();renderSearchStatus();};$('#next').onclick=()=>{shown=new Date(shown.getFullYear(),shown.getMonth()+1,1);renderCalendar();renderSearchStatus();};$('#today').onclick=()=>{shown=new Date();renderCalendar();renderSearchStatus();};$('#month').onchange=e=>{if(e.target.value){shown=new Date(e.target.value+'-01T12:00:00');renderCalendar();renderSearchStatus();}};
 $('#new-history').onclick=()=>absenceForm({type:'Vacaciones',year:$('#year').value,state:'Disfrutadas',requested:state.today},true);
-$('#new-employee').onclick=()=>employeeForm();$('#new-absence').onclick=()=>absenceForm();$('#export').onclick=()=>location.href='/api/export?year='+$('#year').value;$('#print').onclick=()=>window.print();$('#backup').onclick=()=>location.href='/api/backup';
+$('#new-leave').onclick=()=>absenceForm({type:state.types.find(t=>t.active&&t.name!=='Vacaciones')?.name,year:$('#year').value,state:'Solicitadas',requested:state.today},false,'leaves');
+$('#new-employee').onclick=()=>employeeForm();$('#new-absence').onclick=()=>absenceForm();$('#export').onclick=()=>location.href='/api/export?year='+$('#year').value+(view==='leaves'?'&scope=leaves':view==='absences'?'&scope=vacations':'');$('#print').onclick=()=>window.print();$('#backup').onclick=()=>location.href='/api/backup';
 $('#new-user').onclick=()=>form('Crear usuario',field('Usuario','username','','text','required')+field('Contraseña (mínimo 12 caracteres)','password','','password','required minlength="12"')+`<label>Permisos<select name="role">${opt('lectura','Gerencia · solo lectura')+opt('admin','Administración · acceso completo')}</select></label>`,p=>api('users',p));
 $('#new-type').onclick=()=>typeForm();
 $('#demo').onclick=async()=>{try{await api('demo',{});await refresh();notice('Demostración cargada. Los empleados ficticios están identificados como DEMO.');}catch(e){notice(e.message,true);}};
