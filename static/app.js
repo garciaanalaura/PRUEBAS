@@ -1,6 +1,6 @@
 'use strict';
 const $=s=>document.querySelector(s), csrf=$('meta[name=csrf]').content;
-let state={},user={},shown=new Date(),view='calendar';
+let state={},user={},shown=new Date(),view='calendar',editRevision=null,autoTimer=null,lastRefresh=0;
 const searches={calendar:{query:'',sector:'',type:''},employees:{query:''},absences:{query:'',sector:'',type:''},leaves:{query:'',sector:'',type:''}};
 const normalizeName=value=>String(value??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('es-AR').trim().replace(/\s+/g,' ');
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -11,15 +11,36 @@ const initials=e=>(e.first[0]+e.last[0]).toUpperCase();
 const opt=(v,label=v,selected=false)=>`<option value="${esc(v)}" ${selected?'selected':''}>${esc(label)}</option>`;
 const field=(label,name,value='',type='text',extra='')=>`<label>${esc(label)}<input type="${type}" name="${name}" value="${esc(value)}" ${extra}></label>`;
 function notice(text,error=false){$('#notice').hidden=false;$('#notice').textContent=text;$('#notice').className=error?'error':'';}
-async function api(path,body){const options={headers:{'X-CSRF-Token':csrf}};if(body!==undefined){options.method='POST';if(body instanceof FormData)options.body=body;else{options.headers['Content-Type']='application/json';options.body=JSON.stringify(body);}}const r=await fetch('/api/'+path,options);const data=await r.json();if(!r.ok){const e=new Error(data.error||'No se pudo completar la operación.');e.data=data;e.status=r.status;throw e;}return data;}
-function modal(title,html){$('#modal-title').textContent=title;$('#modal-body').innerHTML=html;if(!$('#modal').open)$('#modal').showModal();}
-$('#close').onclick=()=>$('#modal').close();
+async function api(path,body,background=false){
+  const options={headers:{'X-CSRF-Token':csrf}};if(background)options.headers['X-Corevia-Background']='1';
+  if(body!==undefined){
+    options.method='POST';const base=$('#modal').open&&editRevision!==null?editRevision:state.revision;
+    if(base!==undefined)options.headers['If-Match']=String(base);
+    if(body instanceof FormData)options.body=body;
+    else{options.headers['Content-Type']='application/json';options.body=JSON.stringify(body);}
+  }
+  let r;try{r=await fetch('/api/'+path,options);}catch{throw new Error('No se pudo conectar con Corevia. Revisá la conexión antes de intentar guardar nuevamente.');}
+  const data=await r.json().catch(()=>({error:'El servidor no pudo completar la operación. Intentá nuevamente o avisá a Sistemas.'}));
+  if(!r.ok){const e=new Error(data.error||'No se pudo completar la operación.');e.data=data;e.status=r.status;throw e;}
+  const revision=r.headers.get('X-Corevia-Revision');
+  if(revision!==null)state.revision=Math.max(state.revision??0,Number(revision));
+  return data;
+}
+function modal(title,html){editRevision=state.revision??null;$('#modal-title').textContent=title;$('#modal-body').innerHTML=html;if(!$('#modal').open)$('#modal').showModal();}
+$('#close').onclick=()=>{$('#modal').close();if(user.user)refresh().catch(e=>notice(e.message,true));};
+$('#modal').addEventListener('close',()=>{editRevision=null;});
 function form(title,html,save){modal(title,`<form id="editor"><div class="form-grid">${html}</div><p id="form-error" class="error" role="alert"></p><div class="actions"><button type="button" id="cancel">Volver</button><button class="primary">Guardar</button></div></form>`);$('#cancel').onclick=()=>$('#modal').close();$('#editor').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{await save(Object.fromEntries(new FormData(e.target)));$('#modal').close();await refresh();notice('Cambios guardados.');}catch(err){$('#form-error').textContent=err.message;}finally{b.disabled=false;}};}
-async function init(){try{user=await api('session');$('#auth').hidden=!!user.user;$('#app').hidden=!user.user;if(!user.user){$('#auth-title').textContent=user.setup?'Empecemos con tu equipo':'Bienvenida de nuevo';$('#auth-help').textContent=user.setup?'Creá el usuario administrador. Usá una contraseña de al menos 12 caracteres.':'Ingresá para organizar vacaciones y licencias.';$('#login button').textContent=user.setup?'Crear administrador':'Ingresar';return;}$('#identity').textContent=`${user.user} · ${admin()?'Administración':'Solo lectura'}`;document.querySelectorAll('.admin').forEach(el=>el.hidden=!admin());await refresh();}catch(e){notice(e.message,true);}}
-$('#login').onsubmit=async e=>{e.preventDefault();const p=Object.fromEntries(new FormData(e.target));try{if(user.setup)await api('setup',p);await api('login',p);await init();}catch(err){$('#auth-error').textContent=err.message;}};
+async function init(){try{user=await api('session');$('#auth').hidden=!!user.user;$('#app').hidden=!user.user;if(!user.user){state={};clearInterval(autoTimer);$('#auth-title').textContent=user.setup?'Empecemos con tu equipo':'Bienvenida de nuevo';$('#auth-help').textContent=user.setup?'Creá el usuario administrador. Usá una contraseña de al menos 12 caracteres.':'Ingresá para organizar vacaciones y licencias.';$('#login button').textContent=user.setup?'Crear administrador':'Ingresar';if(user.initialization_required)$('#auth-help').textContent='Sistemas debe habilitar la cuenta administradora en el servidor antes del primer acceso.';return;}$('#identity').textContent=`${user.user} · ${admin()?'Administración':'Solo lectura'}`;document.querySelectorAll('.admin').forEach(el=>el.hidden=!admin());if($('#demo-controls'))$('#demo-controls').hidden=!!user.production;$('#restore').hidden=!!user.production;$('#restore-production').hidden=!user.production;await refresh();clearInterval(autoTimer);autoTimer=setInterval(backgroundRefresh,(user.refresh_seconds||30)*1000);}catch(e){notice(e.message,true);}}
+$('#login').onsubmit=async e=>{e.preventDefault();const p=Object.fromEntries(new FormData(e.target));try{if(user.setup)await api('setup',p);await api('login',p);state={};await init();}catch(err){$('#auth-error').textContent=err.message;}};
 $('#logout').onclick=async()=>{await api('logout',{});location.reload();};
 $('#year').value=new Date().getFullYear();
-async function refresh(){state=await api('data?year='+$('#year').value);const sector=$('#sector').value;$('#sector').innerHTML=opt('','Todos los sectores')+[...new Set(state.employees.map(e=>e.sector))].sort().map(s=>opt(s,s,s===sector)).join('');populateTypeFilter();for(const k of ['active','current','next'])$('#stat-'+k).textContent=state.stats[k];for(const key of ['current','next'])$('#stat-'+key+'-detail').textContent=`${state.stats[key+'_detail'].vacations} vacaciones · ${state.stats[key+'_detail'].leaves} licencias`;render();}
+async function refresh(background=false){const requestedYear=$('#year').value;const incoming=await api('data?year='+requestedYear,undefined,background);if($('#year').value!==requestedYear||incoming.revision<(state.revision??0)||(background&&$('#modal').open))return;state=incoming;lastRefresh=Date.now();const sector=$('#sector').value;$('#sector').innerHTML=opt('','Todos los sectores')+[...new Set(state.employees.map(e=>e.sector))].sort().map(s=>opt(s,s,s===sector)).join('');populateTypeFilter();for(const k of ['active','current','next'])$('#stat-'+k).textContent=state.stats[k];for(const key of ['current','next'])$('#stat-'+key+'-detail').textContent=`${state.stats[key+'_detail'].vacations} vacaciones · ${state.stats[key+'_detail'].leaves} licencias`;render();}
+async function backgroundRefresh(){
+  if(!user.user||document.hidden||$('#modal').open||Date.now()-lastRefresh<1000)return;
+  try{await refresh(true);}catch(e){if(e.status===401)await init();else notice(e.message,true);}
+}
+window.addEventListener('focus',backgroundRefresh);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)backgroundRefresh();});
 function matches(e,target){
   if(!e)return false;
   const filters=searches[target],name=normalizeName(full(e)),words=normalizeName(filters.query).split(' ').filter(Boolean);
@@ -115,7 +136,7 @@ function balanceYearLoader(e,apply){
     let ok=false;
     try{
       const data=await api('data?year='+encodeURIComponent(year));
-      if($('#editor')===f&&ticket===version&&f.elements.year.value===year){apply(data.employees.find(x=>x.id===e.id).balance);$('#form-error').textContent='';ok=true;}
+      if($('#editor')===f&&ticket===version&&f.elements.year.value===year){editRevision=data.revision;apply(data.employees.find(x=>x.id===e.id).balance);$('#form-error').textContent='';ok=true;}
     }catch(err){if($('#editor')===f&&ticket===version){$('#form-error').textContent=err.message;requested=null;}}
     finally{if($('#editor')===f&&ticket===version){fields.forEach(x=>x.disabled=false);save.disabled=!ok;}}
   };
@@ -207,6 +228,17 @@ $('#new-history').onclick=()=>absenceForm({type:'Vacaciones',year:$('#year').val
 $('#new-leave').onclick=()=>absenceForm({type:state.types.find(t=>t.active&&t.name!=='Vacaciones')?.name,year:$('#year').value,state:'Solicitadas',requested:state.today},false,'leaves');
 $('#new-employee').onclick=()=>employeeForm();$('#new-absence').onclick=()=>absenceForm();$('#export').onclick=()=>location.href='/api/export?year='+$('#year').value+(view==='leaves'?'&scope=leaves':view==='absences'?'&scope=vacations':'');$('#print').onclick=()=>window.print();$('#backup').onclick=()=>location.href='/api/backup';
 $('#new-user').onclick=()=>form('Crear usuario',field('Usuario','username','','text','required')+field('Contraseña (mínimo 12 caracteres)','password','','password','required minlength="12"')+`<label>Permisos<select name="role">${opt('lectura','Gerencia · solo lectura')+opt('admin','Administración · acceso completo')}</select></label>`,p=>api('users',p));
+$('#change-password').onclick=()=>form('Cambiar mi contraseña',field('Contraseña actual','current','','password','required')+field('Nueva contraseña (mínimo 12 caracteres)','password','','password','required minlength="12"'),async p=>{await api('password',p);location.reload();});
+$('#manage-users').onclick=async()=>{
+  try{
+    const users=await api('users');
+    modal('Usuarios y permisos',users.map(u=>`<div class="history-item"><strong>${esc(u.username)}</strong> · ${u.role==='admin'?'Administración':'Consulta'} · ${u.active?'Activo':'Inactivo'} <button data-manage-user="${u.id}">Administrar</button></div>`).join(''));
+    document.querySelectorAll('[data-manage-user]').forEach(b=>b.onclick=()=>{
+      const u=users.find(x=>x.id===Number(b.dataset.manageUser));
+      form('Administrar usuario',field('Usuario','username',u.username,'text','readonly')+`<label>Permisos<select name="role">${opt('admin','Administración',u.role==='admin')+opt('lectura','Solo consulta',u.role==='lectura')}</select></label><label>Estado<select name="active">${opt('1','Activo',!!u.active)+opt('0','Inactivo',!u.active)}</select></label>`+field('Nueva contraseña (vacío para conservarla)','password','','password','minlength="12"')+'<p class="help full">Al guardar se cerrarán las sesiones de esta cuenta. Debe quedar al menos un administrador activo.</p>',async p=>{await api('users/manage',{...p,id:u.id,active:p.active==='1'});if(u.username===user.user)location.reload();});
+    });
+  }catch(e){notice(e.message,true);}
+};
 $('#new-type').onclick=()=>typeForm();
 $('#demo').onclick=async()=>{try{await api('demo',{});await refresh();notice('Demostración cargada. Los empleados ficticios están identificados como DEMO.');}catch(e){notice(e.message,true);}};
 $('#clear-demo').onclick=async()=>{if(!confirm('¿Eliminar los empleados DEMO y TODAS sus ausencias y saldos? No afecta a otros empleados.'))return;try{await api('demo',{delete:true,confirm:'ELIMINAR DEMO'});await refresh();notice('Demostración eliminada.');}catch(e){notice(e.message,true);}};

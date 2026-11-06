@@ -1,0 +1,25 @@
+[Unit]
+Description=Corevia - Recursos Humanos de Personal Collect S.A.
+After=network.target
+
+[Service]
+Type=simple
+User=corevia
+Group=corevia
+WorkingDirectory=/opt/corevia/current
+Environment=COREVIA_CONFIG=/etc/corevia/corevia.toml
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/corevia/venv/bin/python /opt/corevia/current/run_server.py
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/corevia /var/backups/corevia /var/log/corevia
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

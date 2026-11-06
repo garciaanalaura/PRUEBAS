@@ -156,33 +156,32 @@ No se trasladan vacaciones pendientes automáticamente. Registralas en su perío
 
 ## Datos, copias y recuperación
 
-Los datos quedan en `data\rrhh.sqlite` dentro de la carpeta de Corevia. `data\session.key` es la clave local para firmar sesiones. Ambos se generan automáticamente y se excluyen de Git. No borres esa carpeta. No se guarda información de empleados en GitHub. La base contiene información laboral y hashes de contraseñas: protegé la carpeta y las copias con los permisos de Windows y cifrado de disco que establezca Sistemas.
+Los datos quedan en `data\rrhh.sqlite` dentro de la carpeta de Corevia. `data\session.key` es la clave local para firmar sesiones y `data\security.sqlite` guarda sesiones revocables e intentos de acceso, separados de la base laboral. Estos archivos se generan automáticamente y se excluyen de Git. No borres esa carpeta. No se guarda información de empleados en GitHub. La base contiene información laboral y hashes de contraseñas: protegé la carpeta y las copias con los permisos de Windows y cifrado de disco que establezca Sistemas.
 
 1. Con sesión administradora, abrí **Administración → Descargar copia**.
 2. Guardá el archivo `rrhh-AAAA-MM-DD.sqlite` en un destino autorizado, preferentemente separado de la computadora. La copia incluye usuarios, contraseñas cifradas mediante hash, empleados, ausencias, saldos y auditoría. No envíes copias por correo ni a servicios externos sin autorización.
 3. Para recuperar, abrí **Restaurar copia**, seleccioná el archivo, escribí `RESTAURAR` y tu contraseña actual. La aplicación valida integridad y estructura.
-4. La restauración reemplaza **toda** la base e invalida todas las sesiones existentes al renovar la clave de firma. Ingresá con una cuenta administradora y contraseña que existieran en la copia.
+4. La restauración local reemplaza **toda** la base e invalida las sesiones en el servidor. En producción, la restauración se realiza con el servicio detenido mediante la guía de Sistemas. Ingresá con una cuenta administradora y contraseña que existieran en la copia.
 5. Antes de reemplazar, se conserva automáticamente `data\antes-restaurar-FECHA.sqlite`. Si elegiste una copia equivocada, podés restaurar ese archivo siguiendo el mismo procedimiento.
 
 Las copias son manuales; se recomienda una al terminar cada jornada y antes de importaciones. Para automatizarlas, Sistemas debe programar copias consistentes con la API de SQLite, o detener el servicio antes de copiar el archivo. No copiar una base activa con herramientas que no garanticen consistencia.
 
-## Instalación posterior en red interna (para Sistemas)
+## Instalación centralizada en servidor interno
 
-La arquitectura usa un único servidor HTTP y una sola SQLite local al servidor, no un archivo de base compartido por SMB. Las otras computadoras acceden por navegador; la interfaz refresca datos al guardar y al cambiar de período. Para ver cambios hechos por otra sesión, actualizar la página. Esta versión no tiene notificaciones push ni actualizaciones en tiempo real entre navegadores.
+Consultar **[GUIA_INSTALACION_SISTEMAS.md](GUIA_INSTALACION_SISTEMAS.md)**. Incluye alternativas Windows Server/Linux, servicio, HTTPS interno, cuentas, migración, copias, restauración y accesos directos con ícono Corevia.
 
-1. Definir un equipo interno autorizado, respaldo, política de acceso y responsables. Instalar Python y las dependencias en un entorno virtual.
-2. Ubicar los datos en un disco local con permisos restringidos a la cuenta del servicio. Opcional: variable `RRHH_DATA` con una ruta absoluta. Mantener la hora y zona horaria del servidor correctamente configuradas para Argentina.
-3. Iniciar con Waitress (`python app.py`). Por defecto escucha **solo en 127.0.0.1:8080** y no modifica firewall. `RRHH_HOST` y `RRHH_PORT` permiten elegir interfaz y puerto.
-4. Para acceso de otras computadoras, Sistemas debe configurar **HTTPS** mediante un proxy inverso interno (por ejemplo IIS), certificados y reglas de acceso limitadas a la red autorizada. Mantener Waitress detrás de ese proxy y establecer la variable `RRHH_HTTPS=1` para activar cookies seguras antes de habilitar acceso por HTTPS. No habilitar HTTP con datos laborales en la red. No abrir puertos de Internet ni configurar NAT.
-5. Crear cuentas individuales; Gerencia con rol lectura. Configurar un servicio de Windows y copias programadas bajo la política corporativa. No usar el servidor de desarrollo de Flask.
-6. Probar simultaneidad, permisos, recuperación y capacidad según el tamaño real de la nómina. SQLite es apropiada para una primera instalación pequeña; mayor carga puede requerir migración a PostgreSQL.
+El modo local sigue disponible con `Iniciar-Corevia.bat`. Producción usa una configuración TOML separada, datos fuera del código, un único servicio Waitress detrás de un proxy HTTPS de loopback y una base SQLite central en disco local. No hay que compartir el archivo por red. Las PC solo abren el navegador.
 
-Esta entrega no cambia configuraciones de red, no crea el servicio Windows ni configura HTTPS. Eso requiere intervención y autorización de Sistemas. Para una exposición multiusuario permanente también deben revisarse gestión de cuentas (cambio/recuperación/desactivación), bloqueo de intentos a nivel de servicio. La limitación de login actual es en memoria, para el proceso local.
+Se añadieron sesiones revocables, administración/desactivación de usuarios, cambio de contraseña, protección contra escrituras obsoletas y actualización de datos cada 30 segundos. No se refrescan formularios mientras se editan. La restauración de producción exige detener el servicio y usar `manage.py`; no se admite desde el navegador. No se realizó el despliegue corporativo.
 
 ## Desarrollo y estructura
 
 ```text
-app.py                  Servidor, validaciones, persistencia y API
+app.py                  Funciones de RR. HH. y API
+run_server.py           Servidor Waitress y bloqueo de instancia
+manage.py               Copia, migración y restauración
+corevia/                Configuración, sesiones y almacenamiento
+deployment/             Plantillas para Sistemas
 static/app.js           Calendario y formularios interactivos
 static/style.css        Diseño adaptable e impresión
 templates/index.html    Interfaz sin recursos externos
@@ -203,11 +202,11 @@ python -m venv .venv
 .venv/bin/python app.py
 ```
 
-No se requiere Node para usar la aplicación. `node --check static/app.js` es una comprobación adicional de sintaxis para desarrolladores. Las pruebas usan bases temporales y nunca cargan datos reales. No se requiere Internet para usar la aplicación después de instalar sus dependencias.
+No se requiere Node para usar la aplicación. `node --check static/app.js` es una comprobación adicional de sintaxis para desarrolladores. Las pruebas usan bases temporales y nunca cargan datos reales. No se requiere Internet para usar la aplicación después de instalar sus dependencias. La configuración local predeterminada escucha solo en loopback; no habilita acceso de red.
 
 ## Alcance de esta primera entrega
 
-Incluye empleados, calendario, vacaciones, licencias, saldos por año, saldos iniciales reales con corte e historial sin doble descuento, ajustes auditados, autenticación, roles, Excel, copias y restauración. No incluye integración con nómina/asistencia, confirmación automática del derecho proporcional sin datos de trabajo efectivo, criterios alternativos a días corridos, adjuntos médicos, recuperación de contraseña por correo, un instalador ejecutable firmado ni configuración de la red corporativa. Toda eliminación de demostración o cancelación exige confirmación; los empleados normales se inactivan y las ausencias se cancelan para preservar el historial.
+Incluye empleados, calendario, vacaciones, licencias, saldos por año, saldos iniciales reales con corte e historial sin doble descuento, ajustes auditados, autenticación, roles, Excel, copias y restauración. No incluye integración con nómina/asistencia, confirmación automática del derecho proporcional sin datos de trabajo efectivo, criterios alternativos a días corridos, adjuntos médicos, recuperación de contraseña por correo (Sistemas sí puede restablecerla por consola), un instalador ejecutable firmado ni configuración de la red corporativa. Toda eliminación de demostración o cancelación exige confirmación; los empleados normales se inactivan y las ausencias se cancelan para preservar el historial.
 
 ## Identidad Corevia
 

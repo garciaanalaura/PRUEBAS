@@ -1,0 +1,18 @@
+<!-- Plantilla para WinSW. No contiene ejecutables ni credenciales.
+     Instalar en modo manual, asignar cuenta de servicio restringida y probar
+     antes de establecer el inicio automático. Ver GUIA_INSTALACION_SISTEMAS.md. -->
+<service>
+  <id>Corevia</id>
+  <name>Corevia</name>
+  <description>Gestión interna de Recursos Humanos de Personal Collect S.A.</description>
+  <executable>C:\Corevia\venv\Scripts\python.exe</executable>
+  <arguments>C:\Corevia\current\run_server.py</arguments>
+  <workingdirectory>C:\Corevia\current</workingdirectory>
+  <env name="COREVIA_CONFIG" value="C:\ProgramData\Corevia\config\corevia.toml"/>
+  <env name="PYTHONDONTWRITEBYTECODE" value="1"/>
+  <startmode>Manual</startmode>
+  <stoptimeout>30sec</stoptimeout>
+  <onfailure action="restart" delay="15sec"/>
+  <logpath>C:\ProgramData\Corevia\logs\service</logpath>
+  <log mode="roll-by-size"><sizeThreshold>10240</sizeThreshold><keepFiles>5</keepFiles></log>
+</service>

@@ -1,0 +1,12 @@
+environment = "production"
+data_dir = 'C:\ProgramData\Corevia\data'
+backup_dir = 'C:\ProgramData\Corevia\backups'
+log_dir = 'C:\ProgramData\Corevia\logs'
+host = "127.0.0.1"
+port = 8080
+threads = 4
+allowed_hosts = ["corevia.interno.example"]
+allowed_networks = ["10.0.0.0/24"]
+idle_seconds = 1800
+absolute_seconds = 28800
+refresh_seconds = 30

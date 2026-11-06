@@ -1,0 +1,10 @@
+[Unit]
+Description=Copia diaria de Corevia (hora local del servidor)
+
+[Timer]
+OnCalendar=*-*-* 20:00:00
+Persistent=true
+Unit=corevia-backup.service
+
+[Install]
+WantedBy=timers.target

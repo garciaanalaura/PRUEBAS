@@ -1,0 +1,18 @@
+<!-- Requiere IIS + URL Rewrite + ARR, sitio SOLO HTTPS interno.
+     Sistemas debe habilitar proxy/preserveHostHeader y permitir las dos variables
+     del servidor a nivel autorizado; esta plantilla no cambia esos ajustes. -->
+<configuration>
+  <system.webServer>
+    <security><requestFiltering><requestLimits maxAllowedContentLength="10485760"/></requestFiltering></security>
+    <httpErrors existingResponse="PassThrough"/>
+    <rewrite><rules><rule name="CoreviaProxy" stopProcessing="true">
+      <match url="(.*)"/>
+      <conditions><add input="{HTTPS}" pattern="^ON$"/></conditions>
+      <serverVariables>
+        <set name="HTTP_X_FORWARDED_PROTO" value="https"/>
+        <set name="HTTP_X_FORWARDED_FOR" value="{REMOTE_ADDR}"/>
+      </serverVariables>
+      <action type="Rewrite" url="http://127.0.0.1:8080/{R:1}" appendQueryString="true"/>
+    </rule></rules></rewrite>
+  </system.webServer>
+</configuration>

@@ -1,9 +1,17 @@
 from __future__ import annotations
 import calendar, io, os, secrets, sqlite3
 import click
+import ipaddress, logging, threading, traceback, uuid, tempfile
+from urllib.parse import urlsplit
+from logging.handlers import RotatingFileHandler
+from werkzeug.middleware.proxy_fix import ProxyFix
+from corevia.config import load_settings
+from corevia.storage import backup_database, readonly
+from corevia.security import SecurityStore
 from datetime import date, datetime, timedelta
 from functools import wraps
 from pathlib import Path
+from contextlib import closing
 from flask import Flask, abort, g, jsonify, render_template, request, session, send_file, has_request_context
 from werkzeug.security import generate_password_hash, check_password_hash
 from openpyxl import Workbook, load_workbook
@@ -22,6 +30,43 @@ CREATE TABLE IF NOT EXISTS absences(id INTEGER PRIMARY KEY, employee INTEGER NOT
 CREATE TABLE IF NOT EXISTS types(name TEXT PRIMARY KEY, active INTEGER NOT NULL DEFAULT 1);
 CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, at TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, detail TEXT NOT NULL);
 '''
+
+META_SCHEMA = """CREATE TABLE IF NOT EXISTS app_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+INSERT OR IGNORE INTO app_meta VALUES('revision','0');
+INSERT OR IGNORE INTO app_meta VALUES('schema_version','2');
+CREATE INDEX IF NOT EXISTS absences_employee_year ON absences(employee,year);
+CREATE INDEX IF NOT EXISTS absences_dates ON absences(start,end);
+"""
+
+def migrate_schema(connection):
+    if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='app_meta'").fetchone():
+        previous=connection.execute("SELECT value FROM app_meta WHERE key='schema_version'").fetchone()
+        if previous and int(previous[0])>2:raise ValueError('Esta base requiere una versión más nueva de Corevia.')
+    connection.executescript(SCHEMA+OPENING_SCHEMA+ACCRUAL_SCHEMA+META_SCHEMA)
+    if 'active' not in {r[1] for r in connection.execute('PRAGMA table_info(users)')}:
+        connection.execute('ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1))')
+    version=int(connection.execute("SELECT value FROM app_meta WHERE key='schema_version'").fetchone()[0])
+    if version>2:raise ValueError('Esta base requiere una versión más nueva de Corevia.')
+    connection.execute("UPDATE app_meta SET value='2' WHERE key='schema_version'")
+    connection.commit()
+
+
+def prepare_candidate(candidate):
+    if candidate.execute('PRAGMA integrity_check').fetchone()[0]!='ok':raise ValueError('La copia está dañada.')
+    objects=candidate.execute("SELECT type,name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").fetchall()
+    allowed={'users','employees','balances','absences','types','audit','opening_balances','accruals','app_meta'}
+    if any(r[0] in ('trigger','view') or (r[0]=='table' and (r[1] not in allowed or 'VIRTUAL' in (r[2] or '').upper())) for r in objects):
+        raise ValueError('La copia contiene objetos incompatibles.')
+    required={'users','employees','balances','absences','types','audit'}
+    if not required.issubset({r[1] for r in objects if r[0]=='table'}):raise ValueError('Faltan tablas de Corevia en la copia.')
+    migrate_schema(candidate)
+    with closing(sqlite3.connect(':memory:')) as expected:
+        migrate_schema(expected)
+        for table in allowed:
+            if [tuple(r[1:3]) for r in candidate.execute(f'PRAGMA table_info({table})')]!=[tuple(r[1:3]) for r in expected.execute(f'PRAGMA table_info({table})')]:
+                raise ValueError('La estructura de la copia no es compatible.')
+    if candidate.execute('PRAGMA foreign_key_check').fetchone():raise ValueError('La copia contiene referencias inválidas.')
+    return candidate
 
 def suggested(hired, year):
     start = date.fromisoformat(hired); cutoff = date(year,12,31)
@@ -59,40 +104,117 @@ def days(start,end):
 
 def create_app(data_dir=None):
     app=Flask(__name__)
-    root=Path(data_dir or os.environ.get('RRHH_DATA',Path(__file__).parent/'data')); root.mkdir(parents=True,exist_ok=True)
+    settings=load_settings(data_dir)
+    root=settings.data_dir;root.mkdir(mode=0o700,parents=True,exist_ok=True)
+    if settings.production and os.name!='nt' and root.stat().st_mode & 0o007:raise ValueError('La carpeta de datos no debe permitir acceso a otros usuarios del sistema. Revisá sus permisos.')
     key=root/'session.key'
-    if not key.exists(): key.write_text(secrets.token_hex(32)); key.chmod(0o600)
-    app.config.update(SECRET_KEY=key.read_text(),DATABASE=str(root/'rrhh.sqlite'),MAX_CONTENT_LENGTH=10*1024*1024,SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SECURE=os.environ.get('RRHH_HTTPS')=='1',SESSION_COOKIE_SAMESITE='Strict',PERMANENT_SESSION_LIFETIME=timedelta(hours=8))
+    if not key.exists():
+        try:
+            with key.open('x',encoding='utf-8') as target:target.write(secrets.token_hex(32))
+            key.chmod(0o600)
+        except FileExistsError:pass
+    if len(key.read_text().strip())<32:raise ValueError('La clave de sesión no es válida. No sobrescribas una clave existente sin investigar.')
+    app.config.update(SECRET_KEY=key.read_text(),DATABASE=str(root/'rrhh.sqlite'),MAX_CONTENT_LENGTH=10*1024*1024,SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SECURE=settings.secure_cookie,SESSION_COOKIE_SAMESITE='Strict',SESSION_COOKIE_NAME='corevia_session',SESSION_REFRESH_EACH_REQUEST=False,PERMANENT_SESSION_LIFETIME=timedelta(seconds=settings.absolute_seconds),TRUSTED_HOSTS=list(settings.allowed_hosts)+(['localhost','127.0.0.1','::1'] if settings.production else []))
+    app.extensions['corevia_settings']=settings
+    store=SecurityStore(root/'security.sqlite',settings.idle_seconds,settings.absolute_seconds)
+    app.extensions['corevia_security']=store
+    write_lock=threading.RLock()
+    if settings.production:
+        app.wsgi_app=ProxyFix(app.wsgi_app,x_for=1,x_proto=1)
+    settings.log_dir.mkdir(mode=0o700,parents=True,exist_ok=True)
+    logger=logging.getLogger('corevia.'+uuid.uuid4().hex)
+    handler=RotatingFileHandler(settings.log_dir/'corevia.log',maxBytes=2*1024*1024,backupCount=5,encoding='utf-8',delay=True)
+    handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
+    logger.addHandler(handler);logger.setLevel(logging.INFO);logger.propagate=False
+    app.extensions['corevia_logger']=logger
     def db():
         if 'db' not in g:
-            g.db=sqlite3.connect(app.config['DATABASE'],timeout=15); g.db.row_factory=sqlite3.Row; g.db.execute('PRAGMA foreign_keys=ON')
+            g.db=sqlite3.connect(app.config['DATABASE'],timeout=15); g.db.row_factory=sqlite3.Row; g.db.execute('PRAGMA foreign_keys=ON');g.db.execute('PRAGMA busy_timeout=15000');g.db.execute('PRAGMA trusted_schema=OFF')
         return g.db
     @app.teardown_appcontext
     def close(_):
         if 'db' in g: g.db.close()
+        if g.pop('write_locked',False):write_lock.release()
+        handler.close()
     with app.app_context():
-        db().executescript(SCHEMA + OPENING_SCHEMA + ACCRUAL_SCHEMA)
-        db().executemany('INSERT OR IGNORE INTO types(name) VALUES(?)',[(t,) for t in TYPES]);db().commit()
+        path=Path(app.config['DATABASE'])
+        if path.exists():
+            with readonly(path) as previous:
+                tables={r[0] for r in previous.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                cols={r[1] for r in previous.execute('PRAGMA table_info(users)')}
+                if tables and ('active' not in cols or not {'app_meta','opening_balances','accruals'}.issubset(tables)):
+                    backup_database(path,settings.backup_dir,'antes-migracion')
+        migrate_schema(db())
+        db().execute('PRAGMA journal_mode=WAL');db().execute('PRAGMA synchronous=FULL')
+        if not db().execute('SELECT 1 FROM types').fetchone():db().executemany('INSERT INTO types(name) VALUES(?)',[(t,) for t in TYPES])
+        db().commit()
+        for suffix in ('','-wal','-shm'):
+            protected=Path(str(path)+suffix)
+            if protected.exists():protected.chmod(0o600)
+    def begin_write():
+        if not db().in_transaction:db().execute('BEGIN IMMEDIATE')
+    def commit_changes():
+        db().execute("UPDATE app_meta SET value=CAST(value AS INTEGER)+1 WHERE key='revision'")
+        db().commit()
+    def revision():return int(db().execute("SELECT value FROM app_meta WHERE key='revision'").fetchone()[0])
+    def current_user():
+        if 'current_user' in g:return g.current_user
+        u=db().execute('SELECT * FROM users WHERE id=?',(session.get('uid'),)).fetchone()
+        if not store.valid(session.get('sid'),u,touch=request.headers.get('X-Corevia-Background')!='1'):
+            for name in ('uid','username','role','sid'):session.pop(name,None)
+            u=None
+        g.current_user=u
+        return u
     def audit(action,detail=''):
-        db().execute('INSERT INTO audit(at,actor,action,detail) VALUES(?,?,?,?)',(datetime.now().isoformat(timespec='seconds'),session.get('username','Inicialización') if has_request_context() else 'Importación local',action,str(detail)))
+        db().execute('INSERT INTO audit(at,actor,action,detail) VALUES(?,?,?,?)',(datetime.now().isoformat(timespec='seconds'),session.get('username','Inicialización') if has_request_context() else 'Sistemas (CLI)',action,str(detail)))
     def auth(admin=False):
         def deco(fn):
             @wraps(fn)
             def wrapped(*a,**kw):
-                u=db().execute('SELECT * FROM users WHERE id=?',(session.get('uid'),)).fetchone()
-                if not u: abort(401)
+                u=current_user()
+                if not u: abort(401,description='La sesión venció o fue revocada. Volvé a ingresar.')
                 if admin and u['role']!='admin': abort(403)
                 return fn(*a,**kw)
             return wrapped
         return deco
+    protected_writes={'save_employee','save_balance','save_accrual','save_opening','save_absence','save_type','user','manage_user','import_excel','demo'}
     @app.before_request
     def csrf():
-        if 'csrf' not in session: session['csrf']=secrets.token_hex(24)
-        if request.method in ('POST','PUT','DELETE') and request.headers.get('X-CSRF-Token')!=session['csrf']: abort(400,description='Sesión vencida. Recargá la página.')
+        if settings.production:
+            original=request.environ.get('werkzeug.proxy_fix.orig',{}).get('REMOTE_ADDR',request.remote_addr)
+            try:local_peer=ipaddress.ip_address(original).is_loopback
+            except (ValueError,TypeError):local_peer=False
+            if not local_peer:abort(403,description='Acceso directo al servicio no permitido.')
+            if request.endpoint=='health':return
+            hostname=urlsplit('http://'+request.host).hostname
+            if hostname not in settings.allowed_hosts:abort(400,description='Nombre de servidor no autorizado.')
+            if not request.is_secure:abort(403,description='Corevia requiere HTTPS en producción.')
+            try:client=ipaddress.ip_address(request.remote_addr)
+            except (ValueError,TypeError):abort(403)
+            if not any(client in network for network in settings.allowed_networks):abort(403,description='Red no autorizada.')
+        if request.endpoint=='health':return
+        if 'csrf' not in session:session['csrf']=secrets.token_hex(24)
+        if request.method in ('POST','PUT','DELETE') and request.headers.get('X-CSRF-Token')!=session['csrf']:abort(400,description='Sesión vencida. Recargá la página.')
+        if request.method=='POST' and request.endpoint=='restore' and not settings.production:
+            if not write_lock.acquire(timeout=15):abort(503)
+            g.write_locked=True;g.pop('current_user',None)
+        if request.method=='POST' and request.endpoint=='password_change':
+            if not write_lock.acquire(timeout=15):abort(503)
+            g.write_locked=True;begin_write();g.pop('current_user',None)
+        if request.method=='POST' and request.endpoint in protected_writes:
+            if not current_user():abort(401,description='Volvé a ingresar.')
+            if not write_lock.acquire(timeout=15):abort(503,description='Hay otra operación en curso. Intentá nuevamente.')
+            g.write_locked=True;begin_write();g.pop('current_user',None)
+            if not current_user():abort(401,description='La sesión fue revocada. Volvé a ingresar.')
+            expected=request.headers.get('If-Match')
+            if settings.production and expected is None:abort(428,description='Actualizá la página antes de guardar.')
+            if expected is not None and expected!=str(revision()):abort(409,description='Otra persona modificó la información. Cerrá el formulario y actualizá la página para revisar los datos antes de guardar nuevamente.')
     @app.after_request
     def headers(r):
         r.headers['X-Content-Type-Options']='nosniff';r.headers['X-Frame-Options']='DENY';r.headers['Cache-Control']='no-store'
         r.headers['Content-Security-Policy']="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+        if settings.production and request.is_secure:r.headers['Strict-Transport-Security']='max-age=31536000'
+        if 'db' in g and r.status_code<400:r.headers['X-Corevia-Revision']=str(revision())
         return r
     @app.errorhandler(ValueError)
     def invalid(e): return jsonify(error=str(e)),400
@@ -101,31 +223,54 @@ def create_app(data_dir=None):
     from werkzeug.exceptions import HTTPException
     @app.errorhandler(HTTPException)
     def http_error(e): return jsonify(error=e.description),e.code
+    def report_error(e):
+        incident=uuid.uuid4().hex[:12]
+        frames=';'.join(f'{Path(frame.filename).name}:{frame.lineno}:{frame.name}' for frame in traceback.extract_tb(e.__traceback__))
+        logger.error('incident=%s endpoint=%s error_type=%s frames=%s',incident,request.endpoint,type(e).__name__,frames)
+        return jsonify(error=f'No se pudo completar la operación. Informá a Sistemas la referencia {incident}.'),500
+    @app.errorhandler(sqlite3.OperationalError)
+    def storage_error(e):
+        if 'locked' in str(e).lower() or 'busy' in str(e).lower():return jsonify(error='La base está ocupada. Intentá nuevamente.'),503
+        return report_error(e)
+    app.register_error_handler(Exception,report_error)
+    @app.get('/healthz')
+    def health():
+        db().execute('SELECT 1').fetchone()
+        return jsonify(status='ok',application='Corevia')
     @app.get('/')
     def index(): return render_template('index.html',csrf=session['csrf'])
     @app.get('/api/session')
-    def who(): return jsonify(user=session.get('username'),role=session.get('role'),setup=not db().execute('SELECT 1 FROM users').fetchone())
+    def who():
+        u=current_user();empty=not db().execute('SELECT 1 FROM users').fetchone()
+        return jsonify(user=u['username'] if u else None,role=u['role'] if u else None,production=settings.production,setup=empty and not settings.production,initialization_required=empty and settings.production,refresh_seconds=settings.refresh_seconds)
     @app.post('/api/setup')
     def setup():
+        if settings.production:abort(403,description='Sistemas debe crear el primer administrador desde la consola del servidor.')
         # Serialize first-user creation to prevent two simultaneous administrators.
-        db().execute('BEGIN IMMEDIATE')
+        begin_write()
         if db().execute('SELECT 1 FROM users').fetchone(): abort(403)
         p=request.get_json(); validate_password(p['password'])
         username=required(p,'username')
-        db().execute('INSERT INTO users(username,password,role) VALUES(?,?,?)',(username,generate_password_hash(p['password']),'admin'));audit('Crear administrador');db().commit()
+        db().execute('INSERT INTO users(username,password,role) VALUES(?,?,?)',(username,generate_password_hash(p['password']),'admin'));audit('Crear administrador');commit_changes()
         return jsonify(ok=True)
-    attempts={}
+    def establish_session(u):
+        store.revoke(token=session.get('sid')) if session.get('sid') else None
+        token=session.get('csrf') or secrets.token_hex(24)
+        session.clear();session.update(csrf=token,uid=u['id'],username=u['username'],role=u['role'],sid=store.issue(u));session.permanent=True
     @app.post('/api/login')
     def login():
-        ip=request.remote_addr; now=datetime.now().timestamp(); recent=[t for t in attempts.get(ip,[]) if now-t<300]
-        if len(recent)>=10: abort(429,description='Demasiados intentos. Esperá cinco minutos.')
-        p=request.get_json(); u=db().execute('SELECT * FROM users WHERE username=?',(p.get('username'),)).fetchone()
-        if not u or not check_password_hash(u['password'],p.get('password','')):
-            attempts[ip]=recent+[now];abort(401,description='Usuario o contraseña incorrectos.')
-        session.update(uid=u['id'],username=u['username'],role=u['role']);session.permanent=True;attempts.pop(ip,None)
+        p=request.get_json();username=str(p.get('username','')).strip()
+        bucket=store.bucket(request.remote_addr,username)
+        if store.blocked(bucket):abort(429,description='Demasiados intentos. Esperá cinco minutos.')
+        u=db().execute('SELECT * FROM users WHERE username=?',(username,)).fetchone()
+        if not u or not check_password_hash(u['password'],p.get('password','')) or not u['active']:
+            store.failure(bucket);abort(401,description='Usuario o contraseña incorrectos.')
+        establish_session(u);store.clear_failures(bucket)
         return jsonify(ok=True)
     @app.post('/api/logout')
-    def logout(): session.clear();return jsonify(ok=True)
+    def logout():
+        if session.get('sid'):store.revoke(token=session['sid'])
+        session.clear();return jsonify(ok=True)
     def chargeable(start,end,cutoff=None):
         """Snapshot is the balance at the close of cutoff; only subsequent days consume it."""
         if not cutoff: return days(start,end)
@@ -161,6 +306,8 @@ def create_app(data_dir=None):
     @app.get('/api/data')
     @auth()
     def data():
+        db().execute('BEGIN')
+        data_revision=revision()
         year=int(request.args.get('year',date.today().year))
         if not 1900<=year<=2200:raise ValueError('Período anual inválido.')
         employees=[]
@@ -177,7 +324,7 @@ def create_app(data_dir=None):
             records=[r for r in absences if r['state'] in ('Aprobadas','Disfrutadas') and r['start']<b.isoformat() and r['end']>=a.isoformat()]
             return dict(total=len({r['employee'] for r in records}),vacations=len({r['employee'] for r in records if r['type']=='Vacaciones'}),leaves=len({r['employee'] for r in records if r['type']!='Vacaciones'}))
         this_month=counts(current,following);next_month=counts(following,after)
-        return jsonify(employees=employees,absences=absences,types=[dict(t) for t in db().execute('SELECT * FROM types ORDER BY name')],stats=dict(active=sum(e['active'] for e in employees),current=this_month['total'],next=next_month['total'],current_detail=this_month,next_detail=next_month),today=today.isoformat())
+        return jsonify(revision=data_revision,employees=employees,absences=absences,types=[dict(t) for t in db().execute('SELECT * FROM types ORDER BY name')],stats=dict(active=sum(e['active'] for e in employees),current=this_month['total'],next=next_month['total'],current_detail=this_month,next_detail=next_month),today=today.isoformat())
     def employee_values(p):
         hired=required(p,'hired'); date.fromisoformat(hired)
         if hired>date.today().isoformat(): raise ValueError('La fecha de ingreso no puede ser futura.')
@@ -190,7 +337,7 @@ def create_app(data_dir=None):
             if not db().execute('SELECT 1 FROM employees WHERE id=?',(eid,)).fetchone():abort(404)
             db().execute('UPDATE employees SET code=?,first=?,last=?,sector=?,position=?,hired=?,active=?,notes=? WHERE id=?',v+(eid,))
         else: eid=db().execute('INSERT INTO employees(code,first,last,sector,position,hired,active,notes) VALUES(?,?,?,?,?,?,?,?)',v).lastrowid
-        audit('Guardar empleado',eid);db().commit();return jsonify(id=eid)
+        audit('Guardar empleado',eid);commit_changes();return jsonify(id=eid)
     @app.post('/api/balances')
     @auth(True)
     def save_balance():
@@ -198,7 +345,7 @@ def create_app(data_dir=None):
         import math
         if not math.isfinite(assigned) or not math.isfinite(adjustment) or assigned<0 or not 1900<=year<=2200:raise ValueError('Saldo o período inválido.')
         reason=required(p,'reason')
-        db().execute('INSERT INTO balances VALUES(?,?,?,?,?) ON CONFLICT(employee,year) DO UPDATE SET assigned=excluded.assigned,adjustment=excluded.adjustment,reason=excluded.reason',(int(p['employee']),year,assigned,adjustment,reason));audit('Ajustar saldo',f"{p['employee']} / {year}: asignados {assigned}, ajuste {adjustment}, motivo {reason}");db().commit();return jsonify(ok=True)
+        db().execute('INSERT INTO balances VALUES(?,?,?,?,?) ON CONFLICT(employee,year) DO UPDATE SET assigned=excluded.assigned,adjustment=excluded.adjustment,reason=excluded.reason',(int(p['employee']),year,assigned,adjustment,reason));audit('Ajustar saldo',f"{p['employee']} / {year}: asignados {assigned}, ajuste {adjustment}, motivo {reason}");commit_changes();return jsonify(ok=True)
     @app.post('/api/accruals')
     @auth(True)
     def save_accrual():
@@ -215,7 +362,7 @@ def create_app(data_dir=None):
             if isinstance(raw,bool) or not math.isfinite(value) or value<0 or (whole and not value.is_integer()):raise ValueError('Los días deben ser positivos o cero; los trabajados deben ser enteros.')
             return int(value) if whole else value
         worked=optional_number('worked_days',True);acquired=optional_number('acquired');assigned=optional_number('assigned')
-        db().execute('BEGIN IMMEDIATE')
+        begin_write()
         e=db().execute('SELECT * FROM employees WHERE id=?',(eid,)).fetchone()
         if not e:raise ValueError('El empleado no existe.')
         if asof<e['hired']:raise ValueError('La fecha de cómputo no puede ser anterior al ingreso.')
@@ -230,14 +377,14 @@ def create_app(data_dir=None):
             adjustment=existing['adjustment'] if existing else 0
             db().execute('INSERT INTO balances VALUES(?,?,?,?,?) ON CONFLICT(employee,year) DO UPDATE SET assigned=excluded.assigned,reason=excluded.reason',(eid,year,assigned,adjustment,reason))
         audit('Editar adquiridos y período',f'{eid}/{year}: anterior {dict(previous) if previous else None}; fecha {asof}; trabajados {worked}; adquiridos {acquired}; asignados {assigned}; reiniciar {bool(p.get("reset"))}; motivo {reason}')
-        db().commit();return jsonify(ok=True)
+        commit_changes();return jsonify(ok=True)
     @app.post('/api/opening-balances')
     @auth(True)
     def save_opening():
         import math
         p=request.get_json();eid=int(required(p,'employee'));year=int(required(p,'year'));reason=required(p,'reason')
         if not 1900<=year<=2200:raise ValueError('Período anual inválido.')
-        db().execute('BEGIN IMMEDIATE')
+        begin_write()
         e=db().execute('SELECT * FROM employees WHERE id=?',(eid,)).fetchone()
         if not e:raise ValueError('El empleado no existe.')
         previous=db().execute('SELECT * FROM opening_balances WHERE employee=? AND year=?',(eid,year)).fetchone()
@@ -256,7 +403,7 @@ def create_app(data_dir=None):
         after=balance(e,year)['available']
         current=db().execute('SELECT * FROM opening_balances WHERE employee=? AND year=?',(eid,year)).fetchone()
         audit('Actualizar saldo inicial',f'{eid} / {year}: anterior {dict(previous) if previous else None}; nuevo {dict(current) if current else None}; disponible {before} → {after}; motivo {reason}')
-        db().commit();return jsonify(ok=True,available=after)
+        commit_changes();return jsonify(ok=True,available=after)
     @app.post('/api/absences')
     @auth(True)
     def save_absence():
@@ -264,7 +411,7 @@ def create_app(data_dir=None):
         if not 1900<=year<=2200:raise ValueError('Período anual inválido.')
         if state not in STATES: raise ValueError('Estado inválido.')
         if not db().execute('SELECT 1 FROM types WHERE name=? AND active=1',(kind,)).fetchone(): raise ValueError('Tipo de ausencia inactivo o inexistente.')
-        db().execute('BEGIN IMMEDIATE')
+        begin_write()
         e=db().execute('SELECT * FROM employees WHERE id=?',(eid,)).fetchone()
         if not e:raise ValueError('El empleado no existe.')
         if not e['active'] and state!='Disfrutadas' and (not aid or state not in ('Canceladas','Rechazadas')):raise ValueError('Seleccioná un empleado activo para registrar ausencias.')
@@ -293,7 +440,7 @@ def create_app(data_dir=None):
         values=(eid,kind,year,start,end,state,requested,approved,approver,p.get('notes','')[:2000])
         if aid:db().execute('UPDATE absences SET employee=?,type=?,year=?,start=?,end=?,state=?,requested=?,approved=?,approver=?,notes=? WHERE id=?',values+(aid,))
         else:aid=db().execute('INSERT INTO absences(employee,type,year,start,end,state,requested,approved,approver,notes) VALUES(?,?,?,?,?,?,?,?,?,?)',values).lastrowid
-        audit('Guardar ausencia',f'{aid}: {kind}, {state}, {start} / {end}; días computables: {n_charge if kind=='Vacaciones' and state not in ('Rechazadas','Canceladas') else 0}; excepciones: {warnings}');db().commit();return jsonify(id=aid)
+        audit('Guardar ausencia',f'{aid}: {kind}, {state}, {start} / {end}; días computables: {n_charge if kind=='Vacaciones' and state not in ('Rechazadas','Canceladas') else 0}; excepciones: {warnings}');commit_changes();return jsonify(id=aid)
     @app.post('/api/types')
     @auth(True)
     def save_type():
@@ -302,13 +449,57 @@ def create_app(data_dir=None):
         if old and old!=name:
             db().execute('UPDATE types SET name=?,active=? WHERE name=?',(name,int(bool(p.get('active',True))),old));db().execute('UPDATE absences SET type=? WHERE type=?',(name,old))
         else:db().execute('INSERT INTO types VALUES(?,?) ON CONFLICT(name) DO UPDATE SET active=excluded.active',(name,int(bool(p.get('active',True)))))
-        audit('Configurar tipo',name);db().commit();return jsonify(ok=True)
+        audit('Configurar tipo',name);commit_changes();return jsonify(ok=True)
     @app.post('/api/users')
     @auth(True)
     def user():
         p=request.get_json();validate_password(p['password'])
         if p['role'] not in ('admin','lectura'):raise ValueError('Rol inválido.')
-        db().execute('INSERT INTO users(username,password,role) VALUES(?,?,?)',(required(p,'username'),generate_password_hash(p['password']),p['role']));audit('Crear usuario',p['username']);db().commit();return jsonify(ok=True)
+        db().execute('INSERT INTO users(username,password,role) VALUES(?,?,?)',(required(p,'username'),generate_password_hash(p['password']),p['role']));audit('Crear usuario',p['username']);commit_changes();return jsonify(ok=True)
+    @app.get('/api/users')
+    @auth(True)
+    def list_users():return jsonify([dict(r) for r in db().execute('SELECT id,username,role,active FROM users ORDER BY username')])
+    @app.post('/api/users/manage')
+    @auth(True)
+    def manage_user():
+        p=request.get_json();uid=int(p['id']);role=p['role'];active=1 if p.get('active') else 0
+        if role not in ('admin','lectura'):raise ValueError('Rol inválido.')
+        u=db().execute('SELECT * FROM users WHERE id=?',(uid,)).fetchone()
+        if not u:abort(404)
+        if u['active'] and u['role']=='admin' and (not active or role!='admin'):
+            if db().execute("SELECT count(*) FROM users WHERE active=1 AND role='admin'").fetchone()[0]<=1:raise ValueError('Debe quedar al menos un administrador activo.')
+        password=p.get('password','')
+        if password:validate_password(password)
+        db().execute('UPDATE users SET role=?,active=?,password=? WHERE id=?',(role,active,generate_password_hash(password) if password else u['password'],uid))
+        store.revoke(uid=uid);audit('Gestionar usuario',f'{uid}: rol {role}, activo {active}');commit_changes()
+        return jsonify(ok=True)
+    @app.post('/api/password')
+    @auth()
+    def password_change():
+        p=request.get_json();u=current_user();validate_password(p.get('password'))
+        if not check_password_hash(u['password'],p.get('current','')):abort(403,description='Contraseña actual incorrecta.')
+        begin_write();db().execute('UPDATE users SET password=? WHERE id=?',(generate_password_hash(p['password']),u['id']))
+        store.revoke(uid=u['id']);audit('Cambiar contraseña',u['id']);commit_changes();session.clear()
+        return jsonify(ok=True)
+    @app.cli.command('create-admin')
+    @click.argument('username')
+    def create_admin(username):
+        """Crear administrador en consola. La contraseña se pide sin mostrarla."""
+        password=click.prompt('Contraseña',hide_input=True,confirmation_prompt=True)
+        validate_password(password);username=required({'username':username},'username')
+        begin_write()
+        if db().execute('SELECT 1 FROM users WHERE username=?',(username,)).fetchone():raise click.ClickException('El usuario ya existe. Usá reset-password para recuperar acceso.')
+        db().execute("INSERT INTO users(username,password,role) VALUES(?,?,'admin')",(username,generate_password_hash(password)))
+        audit('Crear administrador por consola',username);commit_changes();click.echo('Administrador creado.')
+    @app.cli.command('reset-password')
+    @click.argument('username')
+    def reset_password(username):
+        password=click.prompt('Contraseña',hide_input=True,confirmation_prompt=True)
+        validate_password(password);begin_write()
+        u=db().execute('SELECT * FROM users WHERE username=?',(username,)).fetchone()
+        if not u:raise click.ClickException('El usuario no existe.')
+        db().execute('UPDATE users SET password=? WHERE id=?',(generate_password_hash(password),u['id']))
+        store.revoke(uid=u['id']);audit('Restablecer contraseña por consola',u['id']);commit_changes();click.echo('Contraseña restablecida y sesiones revocadas.')
     @app.get('/api/audit')
     @auth(True)
     def log():return jsonify([dict(r) for r in db().execute('SELECT * FROM audit ORDER BY id DESC LIMIT 200')])
@@ -359,14 +550,14 @@ def create_app(data_dir=None):
                 try:values.append(employee_values(p))
                 except (ValueError,TypeError) as e:raise ValueError(f'Fila {number}: {e}')
         finally:wb.close()
-        db().execute('BEGIN IMMEDIATE')
+        begin_write()
         count=skipped=0
         for value in values:
             if skip_existing and db().execute('SELECT 1 FROM employees WHERE code=?',(value[0],)).fetchone():
                 skipped+=1;continue
             db().execute('INSERT INTO employees(code,first,last,sector,position,hired,active,notes) VALUES(?,?,?,?,?,?,?,?)',value);count+=1
         audit('Importar Excel',f'{count} agregados; {skipped} existentes omitidos')
-        db().commit();return dict(count=count,skipped=skipped)
+        commit_changes();return dict(count=count,skipped=skipped)
     @app.post('/api/import')
     @auth(True)
     def import_excel():
@@ -385,43 +576,35 @@ def create_app(data_dir=None):
     @app.get('/api/backup')
     @auth(True)
     def backup():
-        out=io.BytesIO(db().serialize());return send_file(out,as_attachment=True,download_name=f'rrhh-{date.today()}.sqlite',mimetype='application/octet-stream')
+        with tempfile.TemporaryDirectory(dir=root,prefix='.backup-') as temporary:
+            snapshot=backup_database(app.config['DATABASE'],temporary)
+            out=io.BytesIO(snapshot.read_bytes())
+        return send_file(out,as_attachment=True,download_name=f'rrhh-{date.today()}.sqlite',mimetype='application/octet-stream')
     @app.post('/api/restore')
     @auth(True)
     def restore():
+        if settings.production:abort(403,description='Sistemas debe restaurar con el servicio detenido mediante manage.py.')
         if request.form.get('confirm')!='RESTAURAR':raise ValueError('Escribí RESTAURAR para confirmar.')
         password=request.form.get('password','');u=db().execute('SELECT * FROM users WHERE id=?',(session['uid'],)).fetchone()
         if not check_password_hash(u['password'],password):abort(403,description='Contraseña incorrecta.')
         blob=request.files['file'].read();candidate=sqlite3.connect(':memory:')
         try:
-            candidate.deserialize(blob)
-            if candidate.execute('PRAGMA integrity_check').fetchone()[0]!='ok':raise ValueError('Copia dañada.')
+            with tempfile.TemporaryDirectory(dir=root,prefix='.restore-') as temporary:
+                uploaded=Path(temporary)/'uploaded.sqlite';uploaded.write_bytes(blob);uploaded.chmod(0o600)
+                with closing(sqlite3.connect(uploaded)) as source:source.backup(candidate)
+            prepare_candidate(candidate)
             current=db()
-            for table in ['users','employees','balances','absences','types','audit']:
-                wanted=[r[1:3] for r in current.execute(f'PRAGMA table_info({table})')];actual=[r[1:3] for r in candidate.execute(f'PRAGMA table_info({table})')]
-                if actual!=wanted:raise ValueError('La copia no es compatible con esta versión.')
-            # Older Corevia backups have no opening table. Add only the new empty table.
-            candidate.execute(OPENING_SCHEMA)
-            wanted=[r[1:3] for r in current.execute('PRAGMA table_info(opening_balances)')]
-            actual=[r[1:3] for r in candidate.execute('PRAGMA table_info(opening_balances)')]
-            if actual!=wanted:raise ValueError('La copia no es compatible con los saldos iniciales.')
-            candidate.execute(ACCRUAL_SCHEMA)
-            wanted=[r[1:3] for r in current.execute('PRAGMA table_info(accruals)')]
-            actual=[r[1:3] for r in candidate.execute('PRAGMA table_info(accruals)')]
-            if actual!=wanted:raise ValueError('La copia no es compatible con el cómputo de días adquiridos.')
-            candidate.commit()
-            if candidate.execute('PRAGMA foreign_key_check').fetchone():raise ValueError('La copia contiene referencias inválidas.')
-            if not candidate.execute("SELECT 1 FROM users WHERE role='admin'").fetchone():raise ValueError('La copia no contiene administrador.')
-            backup_path=root/f"antes-restaurar-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}.sqlite"
-            with sqlite3.connect(backup_path) as saved:current.backup(saved)
-            candidate.backup(current);audit('Restaurar copia');current.commit()
-            key.write_text(secrets.token_hex(32));key.chmod(0o600);app.config['SECRET_KEY']=key.read_text();session.clear()
+            if not candidate.execute("SELECT 1 FROM users WHERE role='admin' AND active=1").fetchone():raise ValueError('La copia no contiene administrador activo.')
+            backup_database(app.config['DATABASE'],root,'antes-restaurar')
+            candidate.backup(current);audit('Restaurar copia');commit_changes()
+            store.revoke();session.clear()
         except sqlite3.Error:raise ValueError('El archivo no es una copia SQLite válida.')
         finally:candidate.close()
         return jsonify(ok=True)
     @app.post('/api/demo')
     @auth(True)
     def demo():
+        if settings.production:abort(403,description='La demostración está deshabilitada en producción.')
         p=request.get_json()
         if p.get('delete'):
             if p.get('confirm')!='ELIMINAR DEMO':raise ValueError('Confirmación requerida.')
@@ -435,7 +618,7 @@ def create_app(data_dir=None):
                 eid=db().execute("INSERT INTO employees(code,first,last,sector,position,hired,demo) VALUES(?,?,?,?,?,'2018-03-01',1)",(f'DEMO-{i}',first,last,sector,'Analista')).lastrowid
                 db().execute("INSERT INTO absences(employee,type,year,start,end,state,requested,approved,approver) VALUES(?,?,?,?,?,'Aprobadas',?,?,?)",(eid,'Vacaciones' if i%2 else 'Estudio',today.year,(start+timedelta(days=i)).isoformat(),(end+timedelta(days=i)).isoformat(),today.isoformat(),today.isoformat(),'Demo RR. HH.'))
             audit('Cargar demo')
-        db().commit();return jsonify(ok=True)
+        commit_changes();return jsonify(ok=True)
     return app
 
 def required(p,key):
@@ -451,6 +634,5 @@ def safe_cell(value):
     return "'"+value if isinstance(value,str) and value.startswith(('=','+','-','@')) else value
 
 if __name__=='__main__':
-    from waitress import serve
-    print('Gestión de personas: http://127.0.0.1:8080 — Ctrl+C para cerrar')
-    serve(create_app(),host=os.environ.get('RRHH_HOST','127.0.0.1'),port=int(os.environ.get('RRHH_PORT','8080')),threads=4)
+    from run_server import main
+    main()

@@ -1,0 +1,25 @@
+# Fragmento de configuración. Ajustar IP, DNS, subred y certificados ANTES de usar.
+# log_format va en el bloque http; server también va dentro de http.
+log_format corevia_safe '$time_iso8601 $request_method $uri $status';
+server {
+    listen 10.0.0.10:443 ssl;
+    server_name corevia.interno.example;
+    ssl_certificate     /etc/corevia/tls/fullchain.pem;
+    ssl_certificate_key /etc/corevia/tls/private.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    allow 10.0.0.0/24;
+    deny all;
+    client_max_body_size 10m;
+    access_log /var/log/nginx/corevia-access.log corevia_safe;
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        # Sobrescribir, nunca concatenar cabeceras enviadas por el navegador.
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host "";
+        proxy_set_header Forwarded "";
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 60s;
+    }
+}

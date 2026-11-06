@@ -13,7 +13,7 @@ const { chromium } = require('playwright');
   const python = process.env.CLARA_PYTHON || path.join(root, '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
   const port = process.env.CLARA_TEST_PORT || '8091';
   const base = `http://127.0.0.1:${port}`;
-  const server = spawn(python, ['-u', 'app.py'], { cwd: root, env: { ...process.env, RRHH_DATA: data, RRHH_HOST: '127.0.0.1', RRHH_PORT: port, RRHH_HTTPS: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const server = spawn(python, ['-u', 'app.py'], { cwd: root, env: { ...process.env, COREVIA_ENV: 'local', COREVIA_CONFIG: '', RRHH_DATA: data, RRHH_HOST: '127.0.0.1', RRHH_PORT: port, RRHH_HTTPS: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
   let output = ''; server.stdout.on('data', b => output += b); server.stderr.on('data', b => output += b);
   let browser;
   try {
@@ -164,6 +164,30 @@ const { chromium } = require('playwright');
       await page.locator('[data-view=leaves]').click();await page.locator('#clear-search').click();await page.screenshot({path:process.env.CLARA_SCREENSHOT.replace('.png','-licencias.png'),fullPage:true});
     }
     console.log('OK: secciones separadas, vacaciones sin licencias, licencia aprobada reserva 4 días solo en Licencias, búsquedas independientes y calendario combinado.');
+    // Two independent browser sessions: stale forms must not overwrite newer data.
+    await page.locator('[data-view=employees]').click();await page.locator('#clear-search').click();
+    await page.locator('#new-employee').click();
+    for(const [name,value] of Object.entries({code:'CONFLICT-1',first:'Borrador',last:'Ficticio',sector:'Pruebas',position:'Analista',hired:'2020-01-01'}))await page.locator(`#editor [name=${name}]`).fill(value);
+    const ctx2=await browser.newContext();const remote=await ctx2.newPage();
+    try{
+      remote.on('pageerror',e=>errors.push(e.message));await remote.goto(base);
+      await remote.locator('#login [name=username]').fill('admin');await remote.locator('#login [name=password]').fill('prueba-segura-1234');await remote.locator('#login button').click();await remote.locator('#app').waitFor({state:'visible'});
+      await remote.locator('[data-view=employees]').click();
+      const remoteCreate=async(code,first)=>{
+        await remote.locator('#new-employee').click();
+        for(const [name,value] of Object.entries({code,first,last:'Ficticia',sector:'Pruebas',position:'Analista',hired:'2020-01-01'}))await remote.locator(`#editor [name=${name}]`).fill(value);
+        await remote.locator('#editor button.primary').click();await remote.locator('#modal').waitFor({state:'hidden'});
+      };
+      await remoteCreate('REMOTE-1','Remota');
+      await page.locator('#editor button.primary').click();await page.waitForFunction(()=>document.querySelector('#form-error').textContent.includes('Otra persona'));
+      assert.equal(await page.locator('#editor [name=code]').inputValue(),'CONFLICT-1');
+      await page.locator('#close').click();await page.waitForFunction(()=>document.querySelectorAll('#employees [data-employee]').length===6);
+      await remoteCreate('REMOTE-2','Actualizada');
+      await page.evaluate(async()=>{lastRefresh=0;await backgroundRefresh();});
+      assert.equal(await page.locator('#employees [data-employee]').count(),7);
+      assert((await page.locator('#employees').innerText()).includes('Actualizada'));
+      console.log('OK: dos sesiones de navegador comparten datos; conflicto conserva el formulario y actualización automática muestra los cambios del otro usuario.');
+    }finally{await ctx2.close();}
     assert.deepEqual(errors, []);
     console.log('OK: saldo real 7; historial anterior conserva 7; vacaciones posteriores dejan 4; asignación editable de otro año conserva ambos períodos; sin errores JavaScript.');
   } finally {

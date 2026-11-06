@@ -1,0 +1,16 @@
+[Unit]
+Description=Copia verificada de Corevia
+
+[Service]
+Type=oneshot
+User=corevia
+Group=corevia
+WorkingDirectory=/opt/corevia/current
+Environment=COREVIA_CONFIG=/etc/corevia/corevia.toml
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/corevia/venv/bin/python /opt/corevia/current/manage.py backup
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/backups/corevia /var/lib/corevia

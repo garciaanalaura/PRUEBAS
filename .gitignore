@@ -4,3 +4,17 @@ __pycache__/
 data/
 *.sqlite*
 *.log
+
+# Configuración y material privados (las plantillas .example sí se versionan)
+.env
+.env.*
+!.env.example
+*.private.toml
+corevia.toml
+*.pem
+*.key
+*.pfx
+*.p12
+*.partial
+CoreviaServicio.xml
+web.config
