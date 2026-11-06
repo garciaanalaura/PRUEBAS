@@ -10,6 +10,8 @@ from openpyxl import Workbook, load_workbook
 TYPES = ['Vacaciones','Enfermedad','Estudio','Maternidad','Paternidad','Matrimonio','Fallecimiento de familiar','Trámites personales','Otras']
 OPENING_SCHEMA = '''CREATE TABLE IF NOT EXISTS opening_balances(employee INTEGER NOT NULL REFERENCES employees(id), year INTEGER NOT NULL CHECK(year BETWEEN 1900 AND 2200), cutoff TEXT NOT NULL, remaining REAL NOT NULL CHECK(remaining >= 0), reason TEXT NOT NULL, PRIMARY KEY(employee,year));'''
 
+ACCRUAL_SCHEMA = """CREATE TABLE IF NOT EXISTS accruals(employee INTEGER NOT NULL REFERENCES employees(id), year INTEGER NOT NULL, asof TEXT NOT NULL, worked_days INTEGER, acquired REAL, reason TEXT NOT NULL, PRIMARY KEY(employee,year));"""
+
 STATES = ['Solicitadas','Aprobadas','Rechazadas','Canceladas','Disfrutadas']
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, username TEXT UNIQUE NOT NULL, password TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin','lectura')));
@@ -27,6 +29,27 @@ def suggested(hired, year):
     if start > date(year,1,1): return None
     years = cutoff.year-start.year-((cutoff.month,cutoff.day)<(start.month,start.day))
     return 14 if years <= 5 else 21 if years <= 10 else 28 if years <= 20 else 35
+
+def weekdays(start,end):
+    if end<start:return 0
+    weeks,extra=divmod((end-start).days+1,7)
+    return weeks*5+sum((start.weekday()+i)%7<5 for i in range(extra))
+
+def accrual_estimate(hired,year,asof,worked_days=None):
+    """Indicative Mon–Fri model, not an attendance record or a legal determination."""
+    hired=date.fromisoformat(hired);asof=date.fromisoformat(asof)
+    start=max(hired,date(year,1,1));end=min(asof,date(year,12,31))
+    estimate=weekdays(start,end)
+    worked=estimate if worked_days is None else worked_days
+    annual_days=weekdays(date(year,1,1),date(year,12,31))
+    threshold=(annual_days+1)//2
+    cutoff=date(year,12,31)
+    seniority=year-hired.year-((12,31)<(hired.month,hired.day))
+    full=0 if hired>cutoff else 14 if seniority<=5 else 21 if seniority<=10 else 28 if seniority<=20 else 35
+    earned=(full if worked>=threshold else worked//20) if end>=start else 0
+    projected_work=worked+weekdays(max(start,end+timedelta(days=1)),cutoff)
+    projected=full if projected_work>=threshold else projected_work//20
+    return dict(estimated_acquired=earned,projected_closing=projected,worked_days=worked,estimated_workdays=estimate,full_entitlement=full,half_year_threshold=threshold,asof=end.isoformat(),source='RRHH' if worked_days is not None else 'Estimación lunes a viernes, sin feriados ni asistencia')
 
 def days(start,end):
     a,b=date.fromisoformat(start),date.fromisoformat(end)
@@ -47,7 +70,7 @@ def create_app(data_dir=None):
     def close(_):
         if 'db' in g: g.db.close()
     with app.app_context():
-        db().executescript(SCHEMA + OPENING_SCHEMA)
+        db().executescript(SCHEMA + OPENING_SCHEMA + ACCRUAL_SCHEMA)
         db().executemany('INSERT OR IGNORE INTO types(name) VALUES(?)',[(t,) for t in TYPES]);db().commit()
     def audit(action,detail=''):
         db().execute('INSERT INTO audit(at,actor,action,detail) VALUES(?,?,?,?)',(datetime.now().isoformat(timespec='seconds'),session.get('username','Inicialización'),action,str(detail)))
@@ -112,6 +135,10 @@ def create_app(data_dir=None):
         opening=db().execute('SELECT * FROM opening_balances WHERE employee=? AND year=?',(e['id'],year)).fetchone()
         cutoff=opening['cutoff'] if opening else None
         suggestion=suggested(e['hired'],year); assigned=row['assigned'] if row else (suggestion or 0); adjustment=row['adjustment'] if row else 0
+        accrual=db().execute('SELECT * FROM accruals WHERE employee=? AND year=?',(e['id'],year)).fetchone()
+        asof=accrual['asof'] if accrual else date.today().isoformat()
+        estimate=accrual_estimate(e['hired'],year,asof,accrual['worked_days'] if accrual else None)
+        estimate.update(acquired=accrual['acquired'] if accrual and accrual['acquired'] is not None else estimate['estimated_acquired'],manual=bool(accrual and accrual['acquired'] is not None),record=dict(accrual) if accrual else None,assigned_manual=row is not None)
         used=reserved=deducted_used=included_used=0
         for a in db().execute("SELECT * FROM absences WHERE employee=? AND year=? AND type='Vacaciones'",(e['id'],year)):
             n=days(a['start'],a['end']);charged=chargeable(a['start'],a['end'],cutoff)
@@ -119,7 +146,7 @@ def create_app(data_dir=None):
                 used+=n;deducted_used+=charged;included_used+=n-charged
             elif a['state']=='Aprobadas': reserved+=charged
         base=opening['remaining'] if opening else assigned+adjustment
-        return dict(assigned=assigned,adjustment=adjustment,reason=row['reason'] if row else '',used=used,reserved=reserved,available=base-deducted_used-reserved,suggested=suggestion,needs_review=suggestion is None and row is None and opening is None,opening=dict(opening) if opening else None,base=base,deducted_used=deducted_used,included_used=included_used)
+        return dict(accrual=estimate,assigned=assigned,adjustment=adjustment,reason=row['reason'] if row else '',used=used,reserved=reserved,available=base-deducted_used-reserved,suggested=suggestion,needs_review=suggestion is None and row is None and opening is None,opening=dict(opening) if opening else None,base=base,deducted_used=deducted_used,included_used=included_used)
     @app.get('/api/data')
     @auth()
     def data():
@@ -158,6 +185,38 @@ def create_app(data_dir=None):
         if not math.isfinite(assigned) or not math.isfinite(adjustment) or assigned<0 or not 1900<=year<=2200:raise ValueError('Saldo o período inválido.')
         reason=required(p,'reason')
         db().execute('INSERT INTO balances VALUES(?,?,?,?,?) ON CONFLICT(employee,year) DO UPDATE SET assigned=excluded.assigned,adjustment=excluded.adjustment,reason=excluded.reason',(int(p['employee']),year,assigned,adjustment,reason));audit('Ajustar saldo',f"{p['employee']} / {year}: asignados {assigned}, ajuste {adjustment}, motivo {reason}");db().commit();return jsonify(ok=True)
+    @app.post('/api/accruals')
+    @auth(True)
+    def save_accrual():
+        import math
+        p=request.get_json();eid=int(required(p,'employee'));year=int(required(p,'year'));reason=required(p,'reason')
+        if not 1900<=year<=2200:raise ValueError('Período anual inválido.')
+        asof=required(p,'asof')
+        if date.fromisoformat(asof).isoformat()!=asof or asof>date.today().isoformat() or not date(year,1,1)<=date.fromisoformat(asof)<=date(year,12,31):raise ValueError('La fecha de cómputo debe pertenecer al período y no ser futura.')
+        def optional_number(name,whole=False):
+            raw=p.get(name)
+            if raw is None or raw=='':return None
+            try:value=float(raw)
+            except (TypeError,ValueError):raise ValueError('Los días deben ser numéricos.')
+            if isinstance(raw,bool) or not math.isfinite(value) or value<0 or (whole and not value.is_integer()):raise ValueError('Los días deben ser positivos o cero; los trabajados deben ser enteros.')
+            return int(value) if whole else value
+        worked=optional_number('worked_days',True);acquired=optional_number('acquired');assigned=optional_number('assigned')
+        db().execute('BEGIN IMMEDIATE')
+        e=db().execute('SELECT * FROM employees WHERE id=?',(eid,)).fetchone()
+        if not e:raise ValueError('El empleado no existe.')
+        if asof<e['hired']:raise ValueError('La fecha de cómputo no puede ser anterior al ingreso.')
+        if worked is not None and worked>days(max(e['hired'],f'{year}-01-01'),asof):raise ValueError('Los días computables no pueden superar los días corridos transcurridos del período.')
+        previous=db().execute('SELECT * FROM accruals WHERE employee=? AND year=?',(eid,year)).fetchone()
+        if p.get('reset'):
+            db().execute('DELETE FROM accruals WHERE employee=? AND year=?',(eid,year))
+        else:
+            db().execute('INSERT INTO accruals VALUES(?,?,?,?,?,?) ON CONFLICT(employee,year) DO UPDATE SET asof=excluded.asof,worked_days=excluded.worked_days,acquired=excluded.acquired,reason=excluded.reason',(eid,year,asof,worked,acquired,reason))
+        if assigned is not None:
+            existing=db().execute('SELECT adjustment FROM balances WHERE employee=? AND year=?',(eid,year)).fetchone()
+            adjustment=existing['adjustment'] if existing else 0
+            db().execute('INSERT INTO balances VALUES(?,?,?,?,?) ON CONFLICT(employee,year) DO UPDATE SET assigned=excluded.assigned,reason=excluded.reason',(eid,year,assigned,adjustment,reason))
+        audit('Editar adquiridos y período',f'{eid}/{year}: anterior {dict(previous) if previous else None}; fecha {asof}; trabajados {worked}; adquiridos {acquired}; asignados {assigned}; reiniciar {bool(p.get("reset"))}; motivo {reason}')
+        db().commit();return jsonify(ok=True)
     @app.post('/api/opening-balances')
     @auth(True)
     def save_opening():
@@ -250,9 +309,9 @@ def create_app(data_dir=None):
     def export():
         year=int(request.args.get('year',date.today().year))
         if not 1900<=year<=2200:raise ValueError('Período anual inválido.')
-        wb=Workbook();ws=wb.active;ws.title='Empleados y saldos';ws.append(['Código','Nombre','Apellido','Sector','Puesto','Ingreso','Activo','Período','Asignados','Ajustes','Utilizados','Reservados','Disponibles','Saldo inicial real','Fecha de corte','Motivo saldo inicial','Utilizados incluidos en saldo inicial','Utilizados descontados'])
+        wb=Workbook();ws=wb.active;ws.title='Empleados y saldos';ws.append(['Código','Nombre','Apellido','Sector','Puesto','Ingreso','Activo','Período','Asignados','Ajustes','Utilizados','Reservados','Disponibles','Saldo inicial real','Fecha de corte','Motivo saldo inicial','Utilizados incluidos en saldo inicial','Utilizados descontados','Adquiridos al cómputo','Fecha de cómputo','Proyección al cierre','Días computables','Origen cómputo'])
         for e in db().execute('SELECT * FROM employees'):
-            b=balance(e,year);ws.append([safe_cell(e[k]) for k in ['code','first','last','sector','position','hired']]+[e['active'],year]+[b[k] for k in ['assigned','adjustment','used','reserved','available']]+[b['opening']['remaining'] if b['opening'] else None,b['opening']['cutoff'] if b['opening'] else '',safe_cell(b['opening']['reason']) if b['opening'] else '',b['included_used'],b['deducted_used']])
+            b=balance(e,year);ws.append([safe_cell(e[k]) for k in ['code','first','last','sector','position','hired']]+[e['active'],year]+[b[k] for k in ['assigned','adjustment','used','reserved','available']]+[b['opening']['remaining'] if b['opening'] else None,b['opening']['cutoff'] if b['opening'] else '',safe_cell(b['opening']['reason']) if b['opening'] else '',b['included_used'],b['deducted_used'],b['accrual']['acquired'],b['accrual']['asof'],b['accrual']['projected_closing'],b['accrual']['worked_days'],'Manual' if b['accrual']['manual'] else b['accrual']['source']])
         ws=wb.create_sheet('Ausencias');ws.append(['Empleado','Tipo','Período','Inicio','Fin','Días','Estado','Observaciones','Días incluidos en saldo inicial','Días computables posteriores al corte'])
         for a in db().execute('SELECT a.*,e.first,e.last FROM absences a JOIN employees e ON e.id=a.employee'):
             ws.append([safe_cell(f"{a['first']} {a['last']}"),safe_cell(a['type']),a['year'],a['start'],a['end'],days(a['start'],a['end']),a['state'],safe_cell(a['notes']),included_in_opening(a),chargeable(a['start'],a['end'],opening_cutoff(a)) if a['type']=='Vacaciones' else 0])
@@ -300,6 +359,10 @@ def create_app(data_dir=None):
             wanted=[r[1:3] for r in current.execute('PRAGMA table_info(opening_balances)')]
             actual=[r[1:3] for r in candidate.execute('PRAGMA table_info(opening_balances)')]
             if actual!=wanted:raise ValueError('La copia no es compatible con los saldos iniciales.')
+            candidate.execute(ACCRUAL_SCHEMA)
+            wanted=[r[1:3] for r in current.execute('PRAGMA table_info(accruals)')]
+            actual=[r[1:3] for r in candidate.execute('PRAGMA table_info(accruals)')]
+            if actual!=wanted:raise ValueError('La copia no es compatible con el cómputo de días adquiridos.')
             candidate.commit()
             if candidate.execute('PRAGMA foreign_key_check').fetchone():raise ValueError('La copia contiene referencias inválidas.')
             if not candidate.execute("SELECT 1 FROM users WHERE role='admin'").fetchone():raise ValueError('La copia no contiene administrador.')
@@ -316,6 +379,7 @@ def create_app(data_dir=None):
         p=request.get_json()
         if p.get('delete'):
             if p.get('confirm')!='ELIMINAR DEMO':raise ValueError('Confirmación requerida.')
+            db().execute('DELETE FROM accruals WHERE employee IN (SELECT id FROM employees WHERE demo=1)')
             db().execute('DELETE FROM opening_balances WHERE employee IN (SELECT id FROM employees WHERE demo=1)')
             db().execute('DELETE FROM absences WHERE employee IN (SELECT id FROM employees WHERE demo=1)');db().execute('DELETE FROM balances WHERE employee IN (SELECT id FROM employees WHERE demo=1)');db().execute('DELETE FROM employees WHERE demo=1');audit('Eliminar demo')
         else:

@@ -52,3 +52,8 @@ Se actualizó la marca visible, la paleta a azul marino/azul/celeste, el logo ve
 ## Fechas de vacaciones futuras
 
 Se añadió un selector de modo al formulario y un acceso directo desde la ficha a vacaciones futuras. El historial mantiene el límite de hoy en ambas fechas; el modo normal no tiene ese límite y valida el orden de fechas. El cambio de modo conserva los datos y pasa de Disfrutadas a Solicitadas. La prueba de navegador `tests/browser_opening.cjs` comprueba que se mantienen inicio y observaciones, habilita la fecha final de diciembre, aprueba el registro y reserva dos días sin sumarlos a los disfrutados.
+
+
+## Adquiridos a la fecha y período al cierre
+
+Se conservan las 17 pruebas y se agregan seis (23 en total). Cubren el caso ficticio de ingreso 08/10/2026 y cómputo 06/11/2026 (22 lunes a viernes; 1 día proporcional orientativo; proyección 3), límites de 19/20 computables, umbral orientativo de período completo y separación de años. También verifican corrección manual y cero, días confirmados, reinicio al cálculo diario, asignación anual independiente, conservación de saldo inicial, permisos de lectura, exportación, copias y migración de esquema anterior. La prueba de navegador verifica edición desde la nómina, adquiridos manuales 1 y asignación anual 14 manteniendo el saldo inicial existente; se revisa la ficha con los conceptos separados. Se mantienen las comprobaciones de saldos históricos y vacaciones futuras. No se acredita asistencia real ni se valida un convenio: las sugerencias se identifican como orientativas.

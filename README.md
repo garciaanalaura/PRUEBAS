@@ -84,11 +84,34 @@ Si querés abandonar un saldo inicial real, abrí ese formulario y elegí **Volv
 
 Las copias de la primera versión también pueden restaurarse en esta versión. Restaurar una copia anterior al cambio no incluirá saldos iniciales que todavía no existían cuando se hizo esa copia. Las copias nuevas sí incluyen estos saldos. No restaures una copia nueva en una versión vieja del programa: desconocería el nuevo cálculo.
 
+## Días adquiridos a la fecha y correspondientes al período
+
+La nómina muestra tres conceptos separados:
+
+- **Días adquiridos a la fecha:** orientación calculada hasta la fecha mostrada, o cantidad corregida manualmente por RR. HH.
+- **Período / cierre de año:** asignación anual manual, si existe; en caso contrario, proyección orientativa al 31 de diciembre. No significa que todos esos días estén adquiridos hoy.
+- **Base del saldo:** asignación y ajustes usados para calcular el disponible, o saldo inicial real previamente cargado. Las dos columnas anteriores no se suman entre sí ni se suman nuevamente a esta base.
+
+Para corregirlos, hacé clic en los días adquiridos con el lápiz en la nómina, o abrí la ficha y elegí **Editar adquiridos y período**:
+
+1. Elegí el período y la fecha del cómputo (dentro del período, hasta hoy).
+2. Si disponés del registro de asistencia, cargá los **días trabajados / computables confirmados**. Deben contemplar las reglas aplicables sobre días computables, no simplemente los días de presencia.
+3. Si necesitás corregir el resultado, completá **Días adquiridos: corrección manual**, incluso con cero. Dejalo vacío para usar la orientación calculada desde los días computables.
+4. Para autorizar una cantidad en el saldo disponible, completá **Asignación exacta del período para el saldo**. Se conservan los ajustes, el historial y las reservas. Si hay un saldo inicial real, este sigue siendo la base y se modifica en su propio formulario.
+5. Indicá el motivo de RR. HH. y guardá. La corrección queda registrada por empleado, año y fecha de cómputo. No se sobrescribe automáticamente al día siguiente: se muestra con su fecha hasta que RR. HH. la actualice.
+6. Para volver a la orientación automática diaria, marcá esa opción en el formulario. La asignación anual que ya validaste no se elimina.
+
+**Ejemplo ficticio:** ingreso el 08/10/2026; al 06/11/2026 hay 22 lunes a viernes inclusive. Bajo esa hipótesis se orienta **1 día** proporcional; al 31/12 se proyectan 3. Esto no acredita que haya trabajado esos días ni confirma su derecho efectivo. Con 20 días computables confirmados, el proporcional orientativo es 1; con menos de 20, cero. RR. HH. puede corregir ambas cantidades y la asignación usada para el saldo.
+
+El modelo estima una jornada lunes a viernes, sin descontar feriados ni consultar asistencia, jornada parcial, ausencias o convenio. Para orientar el período completo compara los días computables con la mitad de los lunes a viernes del año; de no alcanzarse esa referencia, utiliza un día por cada veinte computables. La proyección supone continuidad bajo la misma jornada hasta fin de año. **Estos supuestos deben validarse** según los arts. 150–153 de la LCT, la jornada real y el convenio. Las estimaciones no habilitan automáticamente nuevos días para gastar ni reemplazan saldos ya validados.
+
+Las correcciones y los días computables también se incluyen en las copias; Excel muestra adquiridos, fecha, proyección y origen. Las bases y copias anteriores se actualizan agregando una tabla, conservando sus datos y cálculos de saldo.
+
 ## Criterio orientativo de vacaciones
 
 Se calcula la antigüedad al **31 de diciembre del período anual**, con los escalones generales de la LCT: hasta 5 años inclusive, 14 días; más de 5 y hasta 10, 21; más de 10 y hasta 20, 28; más de 20, 35. Se aplica una sugerencia automática únicamente cuando el ingreso es anterior o igual al 1 de enero del período.
 
-**La fecha de ingreso no acredita los días efectivamente trabajados.** Para ingresos durante el año el sistema muestra «Revisar» y deja la asignación automática en cero hasta la intervención de RR. HH. Debe determinarse si corresponde el período completo (art. 151) o el proporcional de un día por cada veinte efectivamente trabajados (art. 153), considerando las ausencias computables, el convenio y las condiciones particulares. El sistema no dispone de un registro de asistencia para decidirlo. Incluso las sugerencias completas requieren validación de RR. HH. Se pueden sobrescribir mediante una asignación y motivo.
+**La fecha de ingreso no acredita los días efectivamente trabajados.** Para ingresos durante el año el sistema mantiene «Revisar» y deja la asignación para el saldo en cero hasta la intervención de RR. HH., pero muestra por separado adquiridos y proyección orientativos Debe determinarse si corresponde el período completo (art. 151) o el proporcional de un día por cada veinte efectivamente trabajados (art. 153), considerando las ausencias computables, el convenio y las condiciones particulares. El sistema no dispone de un registro de asistencia para decidirlo. Incluso las sugerencias completas requieren validación de RR. HH. Se pueden sobrescribir mediante una asignación y motivo.
 
 No se trasladan vacaciones pendientes automáticamente. Registralas en su período de origen con un saldo inicial validado. Las reglas legales no sustituyen el asesoramiento laboral.
 
@@ -145,7 +168,7 @@ No se requiere Node para usar la aplicación. `node --check static/app.js` es un
 
 ## Alcance de esta primera entrega
 
-Incluye empleados, calendario, vacaciones, licencias, saldos por año, saldos iniciales reales con corte e historial sin doble descuento, ajustes auditados, autenticación, roles, Excel, copias y restauración. No incluye integración con nómina/asistencia, cálculo automático del proporcional sin datos de trabajo efectivo, criterios alternativos a días corridos, adjuntos médicos, recuperación de contraseña por correo, un instalador ejecutable firmado ni configuración de la red corporativa. Toda eliminación de demostración o cancelación exige confirmación; los empleados normales se inactivan y las ausencias se cancelan para preservar el historial.
+Incluye empleados, calendario, vacaciones, licencias, saldos por año, saldos iniciales reales con corte e historial sin doble descuento, ajustes auditados, autenticación, roles, Excel, copias y restauración. No incluye integración con nómina/asistencia, confirmación automática del derecho proporcional sin datos de trabajo efectivo, criterios alternativos a días corridos, adjuntos médicos, recuperación de contraseña por correo, un instalador ejecutable firmado ni configuración de la red corporativa. Toda eliminación de demostración o cancelación exige confirmación; los empleados normales se inactivan y las ausencias se cancelan para preservar el historial.
 
 ## Identidad Corevia
 

@@ -1,7 +1,7 @@
 import io, tempfile, unittest
 from datetime import date, timedelta
 from openpyxl import Workbook, load_workbook
-from app import create_app, suggested, days
+from app import create_app, suggested, days, accrual_estimate
 
 class AppTests(unittest.TestCase):
     def setUp(self):
@@ -41,7 +41,7 @@ class AppTests(unittest.TestCase):
         self.assertEqual(self.c.get('/api/data').status_code,401)
         self.post('login',dict(username='gerencia',password='otra-clave-segura'))
         self.assertEqual(self.c.get('/api/data').status_code,200)
-        for path in ['employees','absences','balances','users','types','demo','restore','import']:self.assertEqual(self.post(path,{}).status_code,403,path)
+        for path in ['employees','absences','balances','accruals','users','types','demo','restore','import']:self.assertEqual(self.post(path,{}).status_code,403,path)
         self.assertEqual(self.c.get('/api/backup').status_code,403)
     def test_excel_atomic_import_export(self):
         wb=Workbook();ws=wb.active;ws.append(['code','first','last','sector','position','hired']);ws.append(['E2','Luz','Ruiz','Ventas','Analista','2020-01-01']);ws.append(['E1','Otra','Ruiz','Ventas','Analista','2020-01-01']);out=io.BytesIO();wb.save(out);out.seek(0)
@@ -77,5 +77,69 @@ class AppTests(unittest.TestCase):
         self.assertEqual(self.post('types',dict(name='Vacaciones',active=False)).status_code,400)
         self.post('employees',dict(code='=1+1',first='Luz',last='Prueba',sector='Ventas',position='Test',hired='2020-01-01'))
         book=load_workbook(io.BytesIO(self.c.get('/api/export').data));self.assertEqual(book.active.cell(3,1).data_type,'s')
+
+    def test_acquired_today_and_closing_projection(self):
+        a=accrual_estimate('2026-10-08',2026,'2026-11-06')
+        self.assertEqual(a['estimated_workdays'],22)
+        self.assertEqual(a['estimated_acquired'],1)
+        self.assertEqual(a['projected_closing'],3)
+        self.assertEqual(a['full_entitlement'],14)
+        self.assertEqual(accrual_estimate('2026-10-08',2026,'2026-11-06',19)['estimated_acquired'],0)
+        self.assertEqual(accrual_estimate('2026-10-08',2026,'2026-11-06',20)['estimated_acquired'],1)
+        self.assertEqual(accrual_estimate('2026-10-08',2026,'2026-11-06',40)['estimated_acquired'],2)
+    def test_acquired_threshold_and_year_boundaries(self):
+        a=accrual_estimate('2010-01-01',2026,'2026-11-06')
+        threshold=a['half_year_threshold']
+        self.assertEqual(accrual_estimate('2010-01-01',2026,'2026-11-06',threshold)['estimated_acquired'],28)
+        self.assertEqual(accrual_estimate('2010-01-01',2026,'2026-11-06',threshold-1)['estimated_acquired'],(threshold-1)//20)
+        self.assertEqual(accrual_estimate('2027-01-01',2027,'2026-11-06')['estimated_acquired'],0)
+        self.assertEqual(accrual_estimate('2026-10-08',2026,'2027-11-06')['asof'],'2026-12-31')
+        self.assertEqual(accrual_estimate('2026-10-08',2025,'2026-11-06')['projected_closing'],0)
+    def test_manual_acquired_is_separate_from_assignment_and_year(self):
+        before=self.data()['employees'][0]['balance']['available']
+        p=dict(employee=self.eid,year=self.year,asof=date.today().isoformat(),worked_days=20,acquired=2,reason='Validado por RRHH')
+        self.assertEqual(self.post('accruals',p).status_code,200)
+        b=self.data()['employees'][0]['balance'];self.assertEqual(b['accrual']['acquired'],2);self.assertTrue(b['accrual']['manual']);self.assertEqual(b['available'],before)
+        self.assertEqual(self.post('accruals',{**p,'assigned':1}).status_code,200)
+        b=self.data()['employees'][0]['balance'];self.assertEqual(b['available'],1);self.assertEqual(b['assigned'],1)
+        self.assertIsNone(self.c.get('/api/data?year='+str(self.year-1)).json['employees'][0]['balance']['accrual']['record'])
+        self.assertEqual(self.post('accruals',{**p,'acquired':0,'assigned':0}).status_code,200)
+        self.assertEqual(self.data()['employees'][0]['balance']['accrual']['acquired'],0)
+        self.assertEqual(self.post('accruals',{**p,'reset':True,'assigned':''}).status_code,200)
+        b=self.data()['employees'][0]['balance'];self.assertIsNone(b['accrual']['record']);self.assertEqual(b['assigned'],0)
+    def test_computable_days_manual_clear_and_validation(self):
+        p=dict(employee=self.eid,year=self.year,asof=date.today().isoformat(),worked_days=20,acquired='',reason='Días confirmados')
+        self.assertEqual(self.post('accruals',p).status_code,200)
+        self.assertEqual(self.data()['employees'][0]['balance']['accrual']['acquired'],1)
+        for bad in [dict(worked_days=-1),dict(worked_days=20.5),dict(worked_days=99999),dict(acquired='NaN'),dict(assigned=-1),dict(reason=''),dict(asof='2000-01-01'),dict(year=0),dict(asof=(date.today()+timedelta(days=1)).isoformat())]:
+            self.assertEqual(self.post('accruals',{**p,**bad}).status_code,400,bad)
+        self.assertEqual(self.post('accruals',{**p,'acquired':3}).status_code,200)
+        self.assertEqual(self.post('accruals',p).status_code,200)
+        self.assertFalse(self.data()['employees'][0]['balance']['accrual']['manual'])
+    def test_acquired_preserves_opening_balance_and_exports(self):
+        p=dict(employee=self.eid,year=self.year,asof=date.today().isoformat(),acquired=3,assigned=14,reason='Confirmado')
+        self.post('opening-balances',dict(employee=self.eid,year=self.year,cutoff=date.today().isoformat(),remaining=7,reason='Inicial',confirm=True))
+        self.assertEqual(self.post('accruals',p).status_code,200)
+        b=self.data()['employees'][0]['balance'];self.assertEqual(b['available'],7);self.assertEqual(b['accrual']['acquired'],3)
+        book=load_workbook(io.BytesIO(self.c.get('/api/export?year='+str(self.year)).data))
+        values=dict(zip([c.value for c in book.active[1]],[c.value for c in book.active[2]]))
+        self.assertEqual(values['Adquiridos al cómputo'],3);self.assertEqual(values['Disponibles'],7)
+    def test_acquired_backup_restoration_and_legacy_schema(self):
+        import sqlite3
+        from pathlib import Path
+        p=dict(employee=self.eid,year=self.year,asof=date.today().isoformat(),acquired=3,reason='Confirmado')
+        self.post('accruals',p);backup=self.c.get('/api/backup').data
+        self.post('accruals',{**p,'acquired':8})
+        r=self.c.post('/api/restore',data={'file':(io.BytesIO(backup),'backup.sqlite'),'confirm':'RESTAURAR','password':'contraseña-segura-123'},headers={'X-CSRF-Token':self.csrf})
+        self.assertEqual(r.status_code,200)
+        self.c.get('/')
+        with self.c.session_transaction() as sess:self.csrf=sess['csrf']
+        self.post('login',dict(username='admin',password='contraseña-segura-123'))
+        self.assertEqual(self.data()['employees'][0]['balance']['accrual']['acquired'],3)
+        with sqlite3.connect(Path(self.tmp.name)/'rrhh.sqlite') as con:
+            con.execute('DROP TABLE accruals');con.commit();legacy=con.serialize()
+        create_app(self.tmp.name)
+        r=self.c.post('/api/restore',data={'file':(io.BytesIO(legacy),'legacy.sqlite'),'confirm':'RESTAURAR','password':'contraseña-segura-123'},headers={'X-CSRF-Token':self.csrf})
+        self.assertEqual(r.status_code,200)
 
 if __name__=='__main__':unittest.main()
