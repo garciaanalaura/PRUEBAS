@@ -47,3 +47,8 @@ Prueba opcional reproducible en `tests/browser_opening.cjs`: requiere Playwright
 ## Identidad Corevia
 
 Se actualizó la marca visible, la paleta a azul marino/azul/celeste, el logo vectorial y el favicon, y se agregó `Iniciar-Corevia.bat`. El iniciador anterior delega en el nuevo. Pasaron las 17 pruebas existentes, la comprobación de sintaxis JavaScript y el flujo de navegador con datos temporales. Se revisó la captura de la ficha con la nueva paleta. No cambia el esquema de datos por este ajuste visual. Los SVG son una adaptación de la referencia, con tipografía del sistema.
+
+
+## Fechas de vacaciones futuras
+
+Se añadió un selector de modo al formulario y un acceso directo desde la ficha a vacaciones futuras. El historial mantiene el límite de hoy en ambas fechas; el modo normal no tiene ese límite y valida el orden de fechas. El cambio de modo conserva los datos y pasa de Disfrutadas a Solicitadas. La prueba de navegador `tests/browser_opening.cjs` comprueba que se mantienen inicio y observaciones, habilita la fecha final de diciembre, aprueba el registro y reserva dos días sin sumarlos a los disfrutados.

@@ -62,6 +62,12 @@ No es necesario empezar con el total que sugiere la antigüedad. Podés registra
 - La asignación anual original se conserva, pero mientras haya un saldo inicial real no se suma a este ni determina el disponible.
 - Para otro año, cambiá el período dentro del formulario: se cargarán sus propios valores. No se copian automáticamente los saldos del año que estabas consultando.
 
+### Cargar vacaciones futuras (por ejemplo, diciembre)
+
+Usá **Registrar vacaciones / licencias** o **Registrar vacaciones futuras** en la ficha del empleado. Tanto Desde como Hasta admiten fechas futuras. Elegí **Solicitadas** si todavía están pendientes o **Aprobadas** para reservar días (requiere fecha y responsable de aprobación).
+
+Si abriste **Registrar vacaciones ya tomadas**, arriba del formulario elegí **Vacaciones futuras / solicitudes / licencias** en «¿Qué querés registrar?». Se conservan empleado, período, fechas y observaciones, y el estado pasa de Disfrutadas a Solicitadas. El modo de historial limita ambas fechas a hoy: una ausencia futura no debe registrarse como ya disfrutada. La fecha final debe ser igual o posterior al inicio.
+
 ### Si conocés el total anual original
 
 Usá **Editar días asignados**, ingresá el total anual exacto, los ajustes y el motivo. Si **no hay saldo inicial real activo**, Corevia restará todas las vacaciones disfrutadas/aprobadas y las reservas de ese período. Podés cargar las vacaciones antiguas con **Registrar vacaciones ya tomadas**.
