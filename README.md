@@ -1,18 +1,18 @@
-# Clara · Gestión de vacaciones y licencias
+# Corevia · Gestión de vacaciones y licencias
 
 Aplicación web interna para una empresa argentina. Python 3.12+, Flask, SQLite y Waitress. Interfaz en español, sin servicios externos, fuentes remotas ni almacenamiento en la nube. Inspirada en la referencia de tarjetas suministrada.
 
 ## Empezar en Windows, paso a paso
 
 1. Instalá **Python 3.12 o superior** desde https://www.python.org/downloads/windows/. En el instalador marcá **Add Python to PATH** e incluí el lanzador `py`.
-2. Descargá este repositorio desde GitHub con **Code → Download ZIP**. Descomprimilo en una carpeta propia, por ejemplo `C:\Clara`. No lo ejecutes dentro del ZIP, una carpeta compartida o una carpeta sincronizada con OneDrive.
-3. Abrí la carpeta y hacé doble clic en **Iniciar-Clara.bat**. La primera vez necesita Internet para descargar las dependencias desde PyPI. Esperá a que termine. No cierres la ventana que se abre.
+2. Descargá este repositorio desde GitHub con **Code → Download ZIP**. Descomprimilo en una carpeta propia, por ejemplo `C:\Corevia`. No lo ejecutes dentro del ZIP, una carpeta compartida o una carpeta sincronizada con OneDrive.
+3. Abrí la carpeta y hacé doble clic en **Iniciar-Corevia.bat**. La primera vez necesita Internet para descargar las dependencias desde PyPI. Esperá a que termine. No cierres la ventana que se abre.
 4. El iniciador abre el navegador en `http://127.0.0.1:8080`. Si todavía no responde, esperá unos segundos y actualizá la página. Esa dirección funciona únicamente en tu propia computadora.
 5. En el primer acceso, elegí un nombre de usuario y una contraseña de **al menos 12 caracteres**. Esa cuenta será administradora. No hay contraseñas predeterminadas. Conservá la contraseña en un lugar seguro.
 6. Para probar, entrá en **Administración → Cargar demostración**. Se crean cuatro empleados ficticios, con identificadores `DEMO-1` a `DEMO-4`. Ningún dato real se incluye en el proyecto.
 7. Revisá Calendario, Empleados y Vacaciones y licencias. El botón **Registrar ausencia** permite cargar vacaciones u otra licencia.
 8. Antes de empezar con información real, hacé una copia si querés conservar la prueba y usá **Administración → Eliminar demostración**. Esto elimina únicamente los empleados marcados como demo y todos sus saldos y ausencias, aunque los hayas editado. Los empleados que agregaste manualmente se conservan.
-9. Para cerrar, volvé a la ventana del iniciador, presioná **Ctrl+C**, confirmá si Windows pregunta, y cerrá la ventana. Cerrar el navegador no apaga el servidor. Para volver a trabajar, abrí de nuevo `Iniciar-Clara.bat`.
+9. Para cerrar, volvé a la ventana del iniciador, presioná **Ctrl+C**, confirmá si Windows pregunta, y cerrá la ventana. Cerrar el navegador no apaga el servidor. Para volver a trabajar, abrí de nuevo `Iniciar-Corevia.bat`.
 
 **No está instalada en tu computadora por descargar el código.** Estos pasos preparan tu instalación local. El iniciador se proporciona para Windows; las pruebas de esta entrega se ejecutaron en Linux, no en Windows.
 
@@ -20,7 +20,7 @@ Aplicación web interna para una empresa argentina. Python 3.12+, Flask, SQLite 
 
 - «Python no se reconoce»: reinstalá Python con el lanzador `py` y abrí otra vez el iniciador.
 - No abre el navegador: escribí `http://127.0.0.1:8080` en Edge o Chrome. Verificá que la ventana del iniciador siga abierta.
-- El puerto está ocupado: cerrá otra instancia de Clara. Pedí a Sistemas que cambie `RRHH_PORT` si ya lo usa otra aplicación.
+- El puerto está ocupado: cerrá otra instancia de Corevia. Pedí a Sistemas que cambie `RRHH_PORT` si ya lo usa otra aplicación.
 - Error al instalar paquetes: revisá Internet y las políticas de la empresa. No desactives antivirus, certificados ni firewall. Mostrá el mensaje a Sistemas.
 - No recordás la contraseña: no existe recuperación por correo. Pedí asistencia a Sistemas antes de modificar archivos o restaurar una copia.
 
@@ -46,8 +46,8 @@ No es necesario empezar con el total que sugiere la antigüedad. Podés registra
 
 1. Abrí **Empleados**, buscá a la persona y seleccioná su nombre.
 2. Elegí **Cargar / editar saldo inicial real**.
-3. Indicá el **año al que corresponden los días**, los **días restantes**, la **fecha de corte** y un motivo (por ejemplo, «Saldo validado al comenzar a usar Clara»).
-4. La fecha de corte es **inclusive, al cierre de ese día**. El saldo que ingresás ya debe contemplar las vacaciones tomadas hasta esa fecha. No restes las vacaciones aprobadas posteriores: Clara las reserva aparte.
+3. Indicá el **año al que corresponden los días**, los **días restantes**, la **fecha de corte** y un motivo (por ejemplo, «Saldo validado al comenzar a usar Corevia»).
+4. La fecha de corte es **inclusive, al cierre de ese día**. El saldo que ingresás ya debe contemplar las vacaciones tomadas hasta esa fecha. No restes las vacaciones aprobadas posteriores: Corevia las reserva aparte.
 5. Revisá la vista previa, marcá la confirmación y guardá. El año seleccionado se mostrará en la nómina y la ficha.
 6. Desde la ficha, elegí **Registrar vacaciones ya tomadas**. También está disponible en **Vacaciones y licencias**. Indicá empleado, período anual, inicio, fin y observaciones. El estado será **Disfrutadas** y no se permiten fechas futuras.
 
@@ -64,7 +64,7 @@ No es necesario empezar con el total que sugiere la antigüedad. Podés registra
 
 ### Si conocés el total anual original
 
-Usá **Editar días asignados**, ingresá el total anual exacto, los ajustes y el motivo. Si **no hay saldo inicial real activo**, Clara restará todas las vacaciones disfrutadas/aprobadas y las reservas de ese período. Podés cargar las vacaciones antiguas con **Registrar vacaciones ya tomadas**.
+Usá **Editar días asignados**, ingresá el total anual exacto, los ajustes y el motivo. Si **no hay saldo inicial real activo**, Corevia restará todas las vacaciones disfrutadas/aprobadas y las reservas de ese período. Podés cargar las vacaciones antiguas con **Registrar vacaciones ya tomadas**.
 
 Si querés abandonar un saldo inicial real, abrí ese formulario y elegí **Volver al cálculo por asignación anual…**, confirmá y dejá un motivo. Esto conserva el historial y vuelve a descontarlo del total anual. Revisá primero que ese total sea correcto.
 
@@ -72,8 +72,8 @@ Si querés abandonar un saldo inicial real, abrí ese formulario y elegí **Volv
 
 1. Desde la versión que estás usando, descargá una copia de seguridad. Cerrá el servidor con **Ctrl+C**.
 2. Descargá el ZIP actualizado de GitHub y descomprimilo en una carpeta temporal.
-3. Copiá los archivos del programa sobre tu carpeta de Clara. **Conservá tu carpeta `data` completa** (base de datos, clave y copias); no la borres ni la reemplaces. No copies bases de pruebas o de otras instalaciones.
-4. Abrí de nuevo **Iniciar-Clara.bat** y recargá la página del navegador (Ctrl+F5 si conserva la pantalla anterior).
+3. Copiá los archivos del programa sobre tu carpeta de Corevia. **Conservá tu carpeta `data` completa** (base de datos, clave y copias); no la borres ni la reemplaces. No copies bases de pruebas o de otras instalaciones.
+4. Abrí de nuevo **Iniciar-Corevia.bat** y recargá la página del navegador (Ctrl+F5 si conserva la pantalla anterior).
 5. Se agrega automáticamente una tabla para los saldos iniciales. Los empleados, vacaciones, licencias, saldos anuales y usuarios existentes se conservan y siguen calculándose como antes hasta que cargues un saldo inicial explícito.
 
 Las copias de la primera versión también pueden restaurarse en esta versión. Restaurar una copia anterior al cambio no incluirá saldos iniciales que todavía no existían cuando se hizo esa copia. Las copias nuevas sí incluyen estos saldos. No restaures una copia nueva en una versión vieja del programa: desconocería el nuevo cálculo.
@@ -88,7 +88,7 @@ No se trasladan vacaciones pendientes automáticamente. Registralas en su perío
 
 ## Datos, copias y recuperación
 
-Los datos quedan en `data\rrhh.sqlite` dentro de la carpeta de Clara. `data\session.key` es la clave local para firmar sesiones. Ambos se generan automáticamente y se excluyen de Git. No borres esa carpeta. No se guarda información de empleados en GitHub. La base contiene información laboral y hashes de contraseñas: protegé la carpeta y las copias con los permisos de Windows y cifrado de disco que establezca Sistemas.
+Los datos quedan en `data\rrhh.sqlite` dentro de la carpeta de Corevia. `data\session.key` es la clave local para firmar sesiones. Ambos se generan automáticamente y se excluyen de Git. No borres esa carpeta. No se guarda información de empleados en GitHub. La base contiene información laboral y hashes de contraseñas: protegé la carpeta y las copias con los permisos de Windows y cifrado de disco que establezca Sistemas.
 
 1. Con sesión administradora, abrí **Administración → Descargar copia**.
 2. Guardá el archivo `rrhh-AAAA-MM-DD.sqlite` en un destino autorizado, preferentemente separado de la computadora. La copia incluye usuarios, contraseñas cifradas mediante hash, empleados, ausencias, saldos y auditoría. No envíes copias por correo ni a servicios externos sin autorización.
@@ -121,7 +121,7 @@ templates/index.html    Interfaz sin recursos externos
 tests/test_app.py       Pruebas de las funciones existentes
 tests/test_opening.py   Pruebas de saldos iniciales, historial y migración
 tests/browser_opening.cjs  Prueba opcional del flujo en navegador
-Iniciar-Clara.bat        Iniciador Windows
+Iniciar-Corevia.bat        Iniciador Windows
 requirements.txt        Dependencias directas
 requirements-lock.txt   Versiones completas verificadas en Linux/Python 3.12
 data/                   Datos locales, fuera de Git
@@ -140,3 +140,9 @@ No se requiere Node para usar la aplicación. `node --check static/app.js` es un
 ## Alcance de esta primera entrega
 
 Incluye empleados, calendario, vacaciones, licencias, saldos por año, saldos iniciales reales con corte e historial sin doble descuento, ajustes auditados, autenticación, roles, Excel, copias y restauración. No incluye integración con nómina/asistencia, cálculo automático del proporcional sin datos de trabajo efectivo, criterios alternativos a días corridos, adjuntos médicos, recuperación de contraseña por correo, un instalador ejecutable firmado ni configuración de la red corporativa. Toda eliminación de demostración o cancelación exige confirmación; los empleados normales se inactivan y las ausencias se cancelan para preservar el historial.
+
+## Identidad Corevia
+
+La interfaz utiliza azul marino, azul brillante y celeste, con una adaptación vectorial del logo e isologo de referencia en `static/brand/`. El logo vectorial usa tipografía del sistema; puede reemplazarse por el archivo vectorial original para reproducir exactamente su tipografía. El iniciador anterior `Iniciar-Clara.bat` se conserva como acceso compatible al nuevo `Iniciar-Corevia.bat`. La carpeta de datos y el formato de las copias no cambian.
+
+Para actualizar solo la marca no necesitás renombrar tu carpeta actual ni mover los datos. Copiá los archivos actualizados conservando `data` y usá `Iniciar-Corevia.bat`. El acceso anterior sigue funcionando como iniciador compatible.

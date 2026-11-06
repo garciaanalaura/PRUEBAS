@@ -295,7 +295,7 @@ def create_app(data_dir=None):
             for table in ['users','employees','balances','absences','types','audit']:
                 wanted=[r[1:3] for r in current.execute(f'PRAGMA table_info({table})')];actual=[r[1:3] for r in candidate.execute(f'PRAGMA table_info({table})')]
                 if actual!=wanted:raise ValueError('La copia no es compatible con esta versión.')
-            # Older Clara backups have no opening table. Add only the new empty table.
+            # Older Corevia backups have no opening table. Add only the new empty table.
             candidate.execute(OPENING_SCHEMA)
             wanted=[r[1:3] for r in current.execute('PRAGMA table_info(opening_balances)')]
             actual=[r[1:3] for r in candidate.execute('PRAGMA table_info(opening_balances)')]

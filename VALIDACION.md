@@ -43,3 +43,7 @@ El entorno volvió a estar disponible. Se verificó lectura del checkout y acces
 - Actualización de una base anterior y restauración de una copia anterior sin pérdida de su cálculo e historial.
 
 Prueba opcional reproducible en `tests/browser_opening.cjs`: requiere Playwright y Chromium como herramientas de desarrollo, sin agregarlas a las dependencias de la aplicación. Comando usado en Linux: `CHROMIUM_PATH=/usr/bin/chromium node tests/browser_opening.cjs`. El script inicia Waitress con una base temporal ficticia y la elimina al finalizar. Verifica alta, saldo real 7, historial previo sin descuento (sigue 7), consumo posterior de 3 días (queda 4), edición de la asignación de otro año sin mezclar saldos y ausencia de errores JavaScript. Se revisó la captura de la ficha con el desglose. Windows continúa pendiente de prueba directa.
+
+## Identidad Corevia
+
+Se actualizó la marca visible, la paleta a azul marino/azul/celeste, el logo vectorial y el favicon, y se agregó `Iniciar-Corevia.bat`. El iniciador anterior delega en el nuevo. Pasaron las 17 pruebas existentes, la comprobación de sintaxis JavaScript y el flujo de navegador con datos temporales. Se revisó la captura de la ficha con la nueva paleta. No cambia el esquema de datos por este ajuste visual. Los SVG son una adaptación de la referencia, con tipografía del sistema.
