@@ -35,7 +35,7 @@ Aplicación web interna para una empresa argentina. Python 3.12+, Flask, SQLite 
 - **Tipos de licencia:** agregar, renombrar o desactivar desde Administración. Vacaciones es un tipo protegido. Los registros de tipos desactivados se conservan.
 - **Usuarios:** desde Administración creá una cuenta de Gerencia con «solo lectura». Puede consultar e imprimir/exportar listados. Solo los administradores pueden modificar datos, ver auditoría y realizar/restaurar copias. La autorización también se comprueba en el servidor.
 - **Excel:** descarga un archivo `.xlsx` con empleados/saldos del período y otra hoja con el historial completo de ausencias. La exportación incluye todos los empleados, sin aplicar los filtros visuales. No contiene contraseñas. Se neutralizan fórmulas en los campos de texto.
-- **Importación:** primera hoja `.xlsx`, encabezados exactos `code, first, last, sector, position, hired`. Un empleado por fila; `hired` debe ser una fecha Excel o texto `AAAA-MM-DD`. Ejemplo: `E001 | Ana | Pérez | Ventas | Analista | 2020-03-15`. Máximo 5000 empleados. Agrega empleados nuevos; identificadores duplicados cancelan toda la operación. Primero probá con datos ficticios y hacé una copia.
+- **Importación:** primera hoja `.xlsx`, encabezados exactos `code, first, last, sector, position, hired`. Un empleado por fila; `hired` debe ser una fecha Excel o texto `AAAA-MM-DD`. Ejemplo: `E001 | Ana | Pérez | Ventas | Analista | 2020-03-15`. Máximo 5000 empleados. Agrega empleados nuevos; por defecto omite los identificadores existentes sin cambiarlos; si desmarcás esa opción, un duplicado cancela toda la operación. Primero probá con datos ficticios y hacé una copia.
 - **Impresión:** elegí el mes y los filtros, luego **Imprimir calendario**. El navegador permite seleccionar «Guardar como PDF». Para colores, habilitá gráficos de fondo. Los enlaces «más» deben consultarse en pantalla para el detalle completo de jornadas con muchas ausencias.
 
 ### Buscar empleados y vacaciones
@@ -43,6 +43,24 @@ Aplicación web interna para una empresa argentina. Python 3.12+, Flask, SQLite 
 Escribí un **nombre o apellido** y presioná **Buscar** o **Enter**. Se admiten coincidencias parciales, mayúsculas, espacios y nombres sin tildes (por ejemplo, `lucia` encuentra `Lucía`). También podés escribir apellido y nombre en cualquier orden. El identificador interno ya no se usa como criterio de búsqueda.
 
 En Empleados se filtran las filas de la nómina; en Vacaciones y licencias se filtran las tarjetas por el nombre o apellido de la persona. Cada sección conserva su propia búsqueda, sin aplicarla a las otras. Debajo se muestra la cantidad de resultados. **Limpiar** vuelve a mostrar los registros y quita los filtros de esa sección. En Empleados se mantienen las opciones de estado y ordenación; sector y tipo de ausencia se muestran solo donde corresponden al calendario o las ausencias.
+
+## Totales de licencias y nómina
+
+Los indicadores laterales muestran **personas con ausencias** durante el mes actual y el siguiente, incluyendo vacaciones, estudio, trámites personales y cualquier otro tipo de licencia. Se desglosan vacaciones y licencias; el total cuenta cada persona una sola vez aunque tenga ambos tipos. Se incluyen Aprobadas y Disfrutadas; no Solicitadas, Rechazadas ni Canceladas.
+
+En Empleados hay una columna **Días de licencia (año)**. La ficha muestra utilizados, reservados, pendientes y el desglose por tipo. Se suman los días corridos dentro del año calendario seleccionado, recortando los registros que cruzan de año. Las pendientes se muestran aparte y no forman parte del total aprobado/disfrutado. Estos días no consumen ni alteran el saldo de vacaciones. Excel incluye las mismas columnas de licencias.
+
+### Importar la nómina que adjuntaste en tu computadora
+
+1. Actualizá los archivos de Corevia, conservando tu carpeta `data` y haciendo una copia previa.
+2. Entrá como administradora en **Administración → Importar empleados desde Excel**.
+3. Seleccioná tu archivo **Empleados lista.xlsx**, que ya tiene los seis encabezados requeridos.
+4. Dejá marcada **Omitir identificadores existentes sin modificarlos** y elegí Importar.
+5. Se agregan solo los empleados nuevos. Si los cuatro identificadores ya existen, se omiten y se conservan sus vacaciones, licencias, saldos y datos laborales. Esta importación no actualiza los registros existentes ni inventa días tomados o saldos, porque el archivo contiene únicamente la nómina.
+
+La nómina suministrada se cargó en la base local del entorno de trabajo, fuera de Git. Esa base no actualiza automáticamente una instalación en tu computadora. Los datos personales y el Excel no se incluyen en el repositorio ni en un ZIP de código.
+
+Para Sistemas, la importación local repetible también está disponible con `.venv/bin/python -m flask --app app:create_app import-roster ruta.xlsx --skip-existing` (en Windows, usar `.venv\Scripts\python.exe`). No crea cuentas ni cambia las credenciales existentes.
 
 ## Cargar saldos reales y vacaciones de meses anteriores
 

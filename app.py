@@ -1,9 +1,10 @@
 from __future__ import annotations
 import calendar, io, os, secrets, sqlite3
+import click
 from datetime import date, datetime, timedelta
 from functools import wraps
 from pathlib import Path
-from flask import Flask, abort, g, jsonify, render_template, request, session, send_file
+from flask import Flask, abort, g, jsonify, render_template, request, session, send_file, has_request_context
 from werkzeug.security import generate_password_hash, check_password_hash
 from openpyxl import Workbook, load_workbook
 
@@ -73,7 +74,7 @@ def create_app(data_dir=None):
         db().executescript(SCHEMA + OPENING_SCHEMA + ACCRUAL_SCHEMA)
         db().executemany('INSERT OR IGNORE INTO types(name) VALUES(?)',[(t,) for t in TYPES]);db().commit()
     def audit(action,detail=''):
-        db().execute('INSERT INTO audit(at,actor,action,detail) VALUES(?,?,?,?)',(datetime.now().isoformat(timespec='seconds'),session.get('username','Inicialización'),action,str(detail)))
+        db().execute('INSERT INTO audit(at,actor,action,detail) VALUES(?,?,?,?)',(datetime.now().isoformat(timespec='seconds'),session.get('username','Inicialización') if has_request_context() else 'Importación local',action,str(detail)))
     def auth(admin=False):
         def deco(fn):
             @wraps(fn)
@@ -147,6 +148,16 @@ def create_app(data_dir=None):
             elif a['state']=='Aprobadas': reserved+=charged
         base=opening['remaining'] if opening else assigned+adjustment
         return dict(accrual=estimate,assigned=assigned,adjustment=adjustment,reason=row['reason'] if row else '',used=used,reserved=reserved,available=base-deducted_used-reserved,suggested=suggestion,needs_review=suggestion is None and row is None and opening is None,opening=dict(opening) if opening else None,base=base,deducted_used=deducted_used,included_used=included_used)
+    def leave_summary(eid,year):
+        start=f'{year}-01-01';end=f'{year}-12-31'
+        result=dict(used=0,reserved=0,pending=0,total=0,by_type={})
+        for a in db().execute("SELECT * FROM absences WHERE employee=? AND type<>'Vacaciones' AND start<=? AND end>=? AND state IN ('Aprobadas','Disfrutadas','Solicitadas')",(eid,end,start)):
+            n=days(max(start,a['start']),min(end,a['end']))
+            key='pending' if a['state']=='Solicitadas' else 'used' if a['state']=='Disfrutadas' or a['end']<date.today().isoformat() else 'reserved'
+            detail=result['by_type'].setdefault(a['type'],dict(used=0,reserved=0,pending=0,total=0))
+            result[key]+=n;detail[key]+=n
+            if key!='pending':result['total']+=n;detail['total']+=n
+        return result
     @app.get('/api/data')
     @auth()
     def data():
@@ -154,7 +165,7 @@ def create_app(data_dir=None):
         if not 1900<=year<=2200:raise ValueError('Período anual inválido.')
         employees=[]
         for e in db().execute('SELECT * FROM employees ORDER BY last,first'):
-            item=dict(e);item['balance']=balance(e,year);item['seniority']=max(0,(date.today()-date.fromisoformat(e['hired'])).days//365);employees.append(item)
+            item=dict(e);item['balance']=balance(e,year);item['leaves']=leave_summary(e['id'],year);item['seniority']=max(0,(date.today()-date.fromisoformat(e['hired'])).days//365);employees.append(item)
         openings={(o['employee'],o['year']):o['cutoff'] for o in db().execute('SELECT * FROM opening_balances')}
         absences=[]
         for a in db().execute('SELECT * FROM absences ORDER BY start'):
@@ -162,8 +173,11 @@ def create_app(data_dir=None):
             charged=chargeable(a['start'],a['end'],cutoff) if a['type']=='Vacaciones' else 0
             absences.append(dict(a,days=n,chargeable_days=charged,included_days=n-charged if cutoff else 0,cutoff=cutoff))
         today=date.today(); current=today.replace(day=1); following=(current.replace(day=28)+timedelta(days=4)).replace(day=1); after=(following.replace(day=28)+timedelta(days=4)).replace(day=1)
-        def count(a,b):return len({r['employee'] for r in absences if r['type']=='Vacaciones' and r['state'] in ('Aprobadas','Disfrutadas') and r['start']<b.isoformat() and r['end']>=a.isoformat()})
-        return jsonify(employees=employees,absences=absences,types=[dict(t) for t in db().execute('SELECT * FROM types ORDER BY name')],stats=dict(active=sum(e['active'] for e in employees),current=count(current,following),next=count(following,after)),today=today.isoformat())
+        def counts(a,b):
+            records=[r for r in absences if r['state'] in ('Aprobadas','Disfrutadas') and r['start']<b.isoformat() and r['end']>=a.isoformat()]
+            return dict(total=len({r['employee'] for r in records}),vacations=len({r['employee'] for r in records if r['type']=='Vacaciones'}),leaves=len({r['employee'] for r in records if r['type']!='Vacaciones'}))
+        this_month=counts(current,following);next_month=counts(following,after)
+        return jsonify(employees=employees,absences=absences,types=[dict(t) for t in db().execute('SELECT * FROM types ORDER BY name')],stats=dict(active=sum(e['active'] for e in employees),current=this_month['total'],next=next_month['total'],current_detail=this_month,next_detail=next_month),today=today.isoformat())
     def employee_values(p):
         hired=required(p,'hired'); date.fromisoformat(hired)
         if hired>date.today().isoformat(): raise ValueError('La fecha de ingreso no puede ser futura.')
@@ -309,33 +323,54 @@ def create_app(data_dir=None):
     def export():
         year=int(request.args.get('year',date.today().year))
         if not 1900<=year<=2200:raise ValueError('Período anual inválido.')
-        wb=Workbook();ws=wb.active;ws.title='Empleados y saldos';ws.append(['Código','Nombre','Apellido','Sector','Puesto','Ingreso','Activo','Período','Asignados','Ajustes','Utilizados','Reservados','Disponibles','Saldo inicial real','Fecha de corte','Motivo saldo inicial','Utilizados incluidos en saldo inicial','Utilizados descontados','Adquiridos al cómputo','Fecha de cómputo','Proyección al cierre','Días computables','Origen cómputo'])
+        wb=Workbook();ws=wb.active;ws.title='Empleados y saldos';ws.append(['Código','Nombre','Apellido','Sector','Puesto','Ingreso','Activo','Período','Asignados','Ajustes','Utilizados','Reservados','Disponibles','Saldo inicial real','Fecha de corte','Motivo saldo inicial','Utilizados incluidos en saldo inicial','Utilizados descontados','Adquiridos al cómputo','Fecha de cómputo','Proyección al cierre','Días computables','Origen cómputo','Días licencia año','Licencias utilizadas','Licencias reservadas','Licencias pendientes'])
         for e in db().execute('SELECT * FROM employees'):
-            b=balance(e,year);ws.append([safe_cell(e[k]) for k in ['code','first','last','sector','position','hired']]+[e['active'],year]+[b[k] for k in ['assigned','adjustment','used','reserved','available']]+[b['opening']['remaining'] if b['opening'] else None,b['opening']['cutoff'] if b['opening'] else '',safe_cell(b['opening']['reason']) if b['opening'] else '',b['included_used'],b['deducted_used'],b['accrual']['acquired'],b['accrual']['asof'],b['accrual']['projected_closing'],b['accrual']['worked_days'],'Manual' if b['accrual']['manual'] else b['accrual']['source']])
+            b=balance(e,year);leave=leave_summary(e['id'],year);ws.append([safe_cell(e[k]) for k in ['code','first','last','sector','position','hired']]+[e['active'],year]+[b[k] for k in ['assigned','adjustment','used','reserved','available']]+[b['opening']['remaining'] if b['opening'] else None,b['opening']['cutoff'] if b['opening'] else '',safe_cell(b['opening']['reason']) if b['opening'] else '',b['included_used'],b['deducted_used'],b['accrual']['acquired'],b['accrual']['asof'],b['accrual']['projected_closing'],b['accrual']['worked_days'],'Manual' if b['accrual']['manual'] else b['accrual']['source']]+[leave[k] for k in ['total','used','reserved','pending']])
         ws=wb.create_sheet('Ausencias');ws.append(['Empleado','Tipo','Período','Inicio','Fin','Días','Estado','Observaciones','Días incluidos en saldo inicial','Días computables posteriores al corte'])
         for a in db().execute('SELECT a.*,e.first,e.last FROM absences a JOIN employees e ON e.id=a.employee'):
             ws.append([safe_cell(f"{a['first']} {a['last']}"),safe_cell(a['type']),a['year'],a['start'],a['end'],days(a['start'],a['end']),a['state'],safe_cell(a['notes']),included_in_opening(a),chargeable(a['start'],a['end'],opening_cutoff(a)) if a['type']=='Vacaciones' else 0])
         out=io.BytesIO();wb.save(out);out.seek(0);return send_file(out,as_attachment=True,download_name=f'RRHH-{year}.xlsx')
+    def import_roster(upload,skip_existing=False):
+        try:
+            wb=load_workbook(upload,read_only=True,data_only=True)
+        except Exception:raise ValueError('No se pudo leer el archivo. Usá un Excel .xlsx válido.')
+        try:
+            rows=iter(wb.active.values);header=list(next(rows,[]))
+            expected=['code','first','last','sector','position','hired']
+            if header[:6]!=expected:raise ValueError('Las primeras columnas deben ser: '+', '.join(expected))
+            values=[]
+            for number,row in enumerate(rows,2):
+                if not any(v is not None and str(v).strip() for v in row):continue
+                if number>5001:raise ValueError('Máximo 5000 filas por archivo.')
+                p=dict(zip(expected,row[:6]));h=p.get('hired')
+                if isinstance(h,datetime):p['hired']=h.date().isoformat()
+                elif isinstance(h,date):p['hired']=h.isoformat()
+                try:values.append(employee_values(p))
+                except (ValueError,TypeError) as e:raise ValueError(f'Fila {number}: {e}')
+        finally:wb.close()
+        db().execute('BEGIN IMMEDIATE')
+        count=skipped=0
+        for value in values:
+            if skip_existing and db().execute('SELECT 1 FROM employees WHERE code=?',(value[0],)).fetchone():
+                skipped+=1;continue
+            db().execute('INSERT INTO employees(code,first,last,sector,position,hired,active,notes) VALUES(?,?,?,?,?,?,?,?)',value);count+=1
+        audit('Importar Excel',f'{count} agregados; {skipped} existentes omitidos')
+        db().commit();return dict(count=count,skipped=skipped)
     @app.post('/api/import')
     @auth(True)
     def import_excel():
-        try:
-            wb=load_workbook(request.files['file'],read_only=True,data_only=True);ws=wb.active;rows=iter(ws.values)
-            expected=['code','first','last','sector','position','hired'];header=list(next(rows))
-            if header[:6]!=expected:raise ValueError('Las primeras columnas deben ser: '+', '.join(expected))
-            count=0
-            for number,row in enumerate(rows,2):
-                if not any(row):continue
-                if number>5001:raise ValueError('Máximo 5000 empleados por archivo.')
-                p=dict(zip(expected,row[:6]));h=p['hired']
-                if isinstance(h,datetime):p['hired']=h.date().isoformat()
-                elif isinstance(h,date):p['hired']=h.isoformat()
-                try:values=employee_values(p)
-                except (ValueError,TypeError) as e:raise ValueError(f'Fila {number}: {e}')
-                db().execute('INSERT INTO employees(code,first,last,sector,position,hired,active,notes) VALUES(?,?,?,?,?,?,?,?)',values);count+=1
-            audit('Importar Excel',count);db().commit();return jsonify(count=count)
+        if 'file' not in request.files:raise ValueError('Seleccioná un Excel .xlsx.')
+        try:return jsonify(import_roster(request.files['file'],request.form.get('skip_existing')=='1'))
         except (ValueError,sqlite3.IntegrityError):raise
-        except Exception:raise ValueError('No se pudo leer el archivo. Usá un Excel .xlsx válido con las columnas indicadas.')
+        except Exception:raise ValueError('No se pudo importar el archivo. Revisá el formato y los datos.')
+    @app.cli.command('import-roster')
+    @click.argument('filename',type=click.Path(exists=True,dir_okay=False))
+    @click.option('--skip-existing',is_flag=True,help='Omitir identificadores existentes sin modificarlos.')
+    def import_roster_command(filename,skip_existing):
+        """Importar una nómina local sin crear usuarios ni cambiar empleados existentes."""
+        try:result=import_roster(filename,skip_existing)
+        except (ValueError,sqlite3.IntegrityError) as e:raise click.ClickException(str(e)) from e
+        click.echo(f"Empleados agregados: {result['count']}; existentes omitidos: {result['skipped']}.")
     @app.get('/api/backup')
     @auth(True)
     def backup():

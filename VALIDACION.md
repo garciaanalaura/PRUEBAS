@@ -62,3 +62,10 @@ Se conservan las 17 pruebas y se agregan seis (23 en total). Cubren el caso fict
 ## Buscadores por nombre y apellido
 
 El formulario ahora tiene Buscar, envío con Enter y Limpiar. La búsqueda usa únicamente nombres y apellidos normalizados; cada sección guarda su consulta por separado. Empleados no recibe los filtros de sector/tipo de otra sección. Se añadió contador de resultados y mensaje de nómina sin coincidencias. La prueba de navegador con cinco empleados ficticios comprueba envío por botón y Enter en nómina y ausencias, apellidos, tildes, mayúsculas, espacios, orden de palabras, cero coincidencias, exclusión de identificadores, limpieza y aislamiento entre secciones; también verifica la combinación con sector y tipo en ausencias. Pasó junto con los flujos existentes de saldos e historial, sin errores JavaScript.
+
+
+## Totales de licencias e importación repetible
+
+Pasaron 27 pruebas automatizadas (23 anteriores y cuatro nuevas). Se verifican indicadores de mes actual/siguiente con vacaciones y distintos tipos de licencia, personas únicas, exclusión de pendientes/canceladas, suma de días por año calendario y tipo, cruces de año, Excel y ausencia de descuento en vacaciones. La importación omite existentes solo cuando se solicita, conserva sus datos y permite repetirla por API o CLI. Las pruebas usan datos ficticios. El archivo de nómina autorizado contiene cuatro registros válidos y únicos; se importaron a la base local ignorada por Git y se repitió la carga con resultado cero nuevos/cuatro omitidos. No se incorporaron el Excel ni datos personales al repositorio.
+
+La prueba en Chromium también confirmó un indicador mensual con cuatro personas: dos con vacaciones y dos con licencias, y ocho días de licencia en la fila de un empleado ficticio. Los demás flujos del navegador continuaron pasando sin errores JavaScript.

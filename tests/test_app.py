@@ -142,4 +142,51 @@ class AppTests(unittest.TestCase):
         r=self.c.post('/api/restore',data={'file':(io.BytesIO(legacy),'legacy.sqlite'),'confirm':'RESTAURAR','password':'contraseña-segura-123'},headers={'X-CSRF-Token':self.csrf})
         self.assertEqual(r.status_code,200)
 
+    def test_monthly_indicators_include_all_licenses_and_unique_people(self):
+        first=date.today().replace(day=1)
+        for i,kind in enumerate(['Vacaciones','Estudio','Trámites personales']):
+            day=(first+timedelta(days=i)).isoformat()
+            self.assertEqual(self.absence(type=kind,start=day,end=day).status_code,200)
+        stats=self.data()['stats'];self.assertEqual(stats['current'],1)
+        self.assertEqual(stats['current_detail'],dict(total=1,vacations=1,leaves=1))
+        next_month=(first.replace(day=28)+timedelta(days=4)).replace(day=1)
+        r=self.absence(type='Estudio',start=next_month.isoformat(),end=next_month.isoformat())
+        self.assertEqual(r.status_code,200);self.assertEqual(self.data()['stats']['next_detail'],dict(total=1,vacations=0,leaves=1))
+    def test_license_days_by_calendar_year_do_not_consume_vacation_balance(self):
+        before=self.data()['employees'][0]['balance']['available']
+        self.assertEqual(self.absence(type='Estudio',year=2024,start='2025-12-29',end='2026-01-03').status_code,200)
+        self.assertEqual(self.absence(type='Trámites personales',year=2025,start='2025-08-01',end='2025-08-02').status_code,200)
+        self.assertEqual(self.absence(type='Estudio',start='2025-09-01',end='2025-09-03',state='Solicitadas').status_code,200)
+        self.assertEqual(self.absence(type='Estudio',start='2025-10-01',end='2025-10-04',state='Canceladas').status_code,200)
+        self.assertEqual(self.absence(type='Estudio',start='2025-11-01',end='2025-11-04',state='Rechazadas').status_code,200)
+        e=self.c.get('/api/data?year=2025').json['employees'][0]
+        self.assertEqual(e['leaves']['total'],5);self.assertEqual(e['leaves']['pending'],3)
+        self.assertEqual(e['leaves']['by_type']['Estudio']['total'],3)
+        self.assertEqual(e['leaves']['by_type']['Trámites personales']['total'],2)
+        self.assertEqual(self.c.get('/api/data?year=2026').json['employees'][0]['leaves']['total'],3)
+        self.assertEqual(self.data()['employees'][0]['balance']['available'],before)
+        book=load_workbook(io.BytesIO(self.c.get('/api/export?year=2025').data));row=dict(zip([c.value for c in book.active[1]],[c.value for c in book.active[2]]))
+        self.assertEqual(row['Días licencia año'],5)
+    def test_license_pending_and_cancelled_do_not_inflate_monthly_counts(self):
+        first=date.today().replace(day=1).isoformat()
+        a=self.absence(type='Estudio',start=first,end=first,state='Solicitadas');self.assertEqual(a.status_code,200)
+        self.assertEqual(self.data()['stats']['current'],0)
+        a=self.absence(id=a.json['id'],type='Estudio',start=first,end=first);self.assertEqual(a.status_code,200)
+        self.assertEqual(self.data()['stats']['current'],1)
+        self.assertEqual(self.absence(id=a.json['id'],type='Estudio',start=first,end=first,state='Canceladas').status_code,200)
+        self.assertEqual(self.data()['stats']['current'],0)
+    def test_repeatable_excel_skip_preserves_existing_employee(self):
+        wb=Workbook();ws=wb.active;ws.append(['code','first','last','sector','position','hired'])
+        ws.append(['E1','No reemplazar','Otro','Otro','Otro','2020-01-01']);ws.append(['E2','Ficticia','Nueva','Ventas','Analista','2020-01-01'])
+        out=io.BytesIO();wb.save(out);blob=out.getvalue()
+        for expected in [(1,1),(0,2)]:
+            r=self.c.post('/api/import',data={'file':(io.BytesIO(blob),'nomina.xlsx'),'skip_existing':'1'},headers={'X-CSRF-Token':self.csrf})
+            self.assertEqual(r.status_code,200);self.assertEqual((r.json['count'],r.json['skipped']),expected)
+        employees=self.data()['employees'];self.assertEqual(len(employees),2)
+        original=next(e for e in employees if e['code']=='E1');self.assertEqual(original['first'],'Ana');self.assertEqual(original['sector'],'Ventas')
+        from pathlib import Path
+        path=Path(self.tmp.name)/'roster.xlsx';path.write_bytes(blob)
+        result=self.app.test_cli_runner().invoke(args=['import-roster',str(path),'--skip-existing'])
+        self.assertEqual(result.exit_code,0,result.output);self.assertIn('existentes omitidos: 2',result.output)
+
 if __name__=='__main__':unittest.main()
